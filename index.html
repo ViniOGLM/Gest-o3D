@@ -2584,6 +2584,8 @@ function renderLoginScreen(){
     e.preventDefault();
     const f = new FormData(e.target);
     const erroEl = document.getElementById('loginErro');
+    erroEl.textContent = 'Verificando…';
+    await sincronizarAntesDoAuth();
     const user = usuarioById(f.get('usuario'));
     const hash = await sha256(f.get('senha'));
     if(!user || user.senhaHash !== hash){ erroEl.textContent = 'Usuário ou senha incorretos.'; return; }
@@ -2616,6 +2618,8 @@ function renderSignupScreen(){
     const f = new FormData(e.target);
     const erroEl = document.getElementById('signupErro');
     const usuario = f.get('usuario').trim();
+    erroEl.textContent = 'Verificando…';
+    await sincronizarAntesDoAuth();
     if(usuarioById(usuario)){ erroEl.textContent = 'Esse usuário já existe.'; return; }
     const novo = {
       usuario, nome: f.get('nome').trim(),
@@ -2638,6 +2642,13 @@ function renderPendingScreen(msg){
   document.getElementById('btnVoltarPending').addEventListener('click', renderLoginScreen);
 }
 
+async function sincronizarAntesDoAuth(){
+  try{
+    await pullFromCloud(false);
+    if(getFirebaseConfig()?.databaseURL) await firebasePull(false);
+  }catch(e){}
+}
+
 function unlockApp(){
   document.body.classList.remove('app-locked');
   document.getElementById('navUsuarios').style.display = currentUserRecord?.admin ? 'flex' : 'none';
@@ -2645,11 +2656,12 @@ function unlockApp(){
   if(footer) footer.textContent = `${currentUserRecord?.nome||currentUserRecord?.usuario} ${currentUserRecord?.admin?'(admin)':''}`;
   goTo('dashboard');
   applyBranding();
-  pullFromCloud(false).then(()=>{ if(getFirebaseConfig()?.databaseURL) firebasePull(false); });
 }
 
 async function renderAuthGate(){
   document.body.classList.add('app-locked');
+  document.getElementById('authCard').innerHTML = '<p class="hint" style="text-align:center;">Carregando…</p>';
+  await sincronizarAntesDoAuth();
   await seedAdminUser();
   const sessao = localStorage.getItem(SESSAO_KEY);
   const user = sessao ? usuarioById(sessao) : null;
@@ -2663,9 +2675,17 @@ async function renderAuthGate(){
    ========================================================= */
 function renderUsuarios(){
   pageEl.innerHTML = `
-    <div class="page-head"><div><h1>Usuários</h1><p>Aprove ou revogue o acesso de contas ao sistema.</p></div></div>
-    <div class="panel" id="usuariosPanel"></div>
+    <div class="page-head">
+      <div><h1>Usuários</h1><p>Aprove ou revogue o acesso de contas ao sistema.</p></div>
+      <button class="btn secondary" id="btnAtualizarUsuarios">🔄 Atualizar</button>
+    </div>
+    <div class="panel" id="usuariosPanel">Sincronizando…</div>
   `;
+  document.getElementById('btnAtualizarUsuarios').addEventListener('click', carregarUsuariosAtualizados);
+  carregarUsuariosAtualizados();
+}
+async function carregarUsuariosAtualizados(){
+  await sincronizarAntesDoAuth();
   desenharUsuarios();
 }
 function desenharUsuarios(){
