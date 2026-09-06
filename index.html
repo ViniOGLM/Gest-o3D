@@ -589,9 +589,13 @@ async function pullFromCloud(showAlert){
    funciona em qualquer navegador/aparelho, com o Firebase do
    próprio usuário)
    ========================================================= */
+const DEFAULT_FIREBASE_CONFIG = { databaseURL: 'https://painel3d-default-rtdb.firebaseio.com', authSecret: '', path: 'vinimakers/dados' };
 function getFirebaseConfig(){
-  try{ return JSON.parse(localStorage.getItem('firebase_config')||'null'); }
-  catch(e){ return null; }
+  try{
+    const saved = JSON.parse(localStorage.getItem('firebase_config')||'null');
+    if(saved && saved.databaseURL) return saved;
+  }catch(e){}
+  return DEFAULT_FIREBASE_CONFIG;
 }
 function setFirebaseConfig(cfg){
   try{ localStorage.setItem('firebase_config', JSON.stringify(cfg)); }catch(e){}
