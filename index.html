@@ -461,6 +461,7 @@ function normalizeDB(db){
     taxaCartaoPercent: p.taxaCartaoPercent ?? 0,
     parcelas: p.parcelas ?? 1,
     pago: p.pago || false,
+    dataPagamento: p.dataPagamento || '',
     ...p,
     status: p.status === 'fila' ? 'aprovado' : p.status,
     itens: (p.itens||[]).map(it=>({extras:[], ...it}))
@@ -603,7 +604,7 @@ function setFirebaseConfig(cfg){
 function clearFirebaseConfig(){
   try{ localStorage.removeItem('firebase_config'); }catch(e){}
 }
-async function firebaseUrl(cfg, extra=''){
+function firebaseUrl(cfg, extra=''){
   const base = cfg.databaseURL.replace(/\/$/,'');
   const path = (cfg.path || 'vinimakers/dados').replace(/^\/|\/$/g,'');
   const auth = cfg.authSecret ? `?auth=${encodeURIComponent(cfg.authSecret)}` : '';
@@ -614,7 +615,7 @@ async function firebasePush(){
   const cfg = getFirebaseConfig();
   if(!cfg || !cfg.databaseURL) return false;
   try{
-    const res = await fetch(await firebaseUrl(cfg), {
+    const res = await fetch(firebaseUrl(cfg), {
       method:'PUT', headers:{'Content-Type':'application/json'}, body: JSON.stringify(DB)
     });
     return res.ok;
@@ -628,7 +629,7 @@ async function firebasePull(showAlert){
     return;
   }
   try{
-    const res = await fetch(await firebaseUrl(cfg));
+    const res = await fetch(firebaseUrl(cfg));
     if(res.ok){
       const cloudDB = await res.json();
       if(cloudDB && Object.keys(cloudDB).length){
@@ -1137,6 +1138,11 @@ function renderDashboard(){
 
   const limiteEstoque = DB.config.limiteBaixoProdutos ?? 5;
   const estoqueBaixo = DB.produtos.filter(p => estoqueQtd(p.id) <= limiteEstoque);
+  const limiteItensAd = DB.config.limiteBaixoItensAdicionais ?? 5;
+  const itensBaixo = DB.itensExtras.filter(ex => estoqueExtraQtd(ex.id) <= limiteItensAd);
+  const limiteFilamentos = DB.config.limiteBaixoFilamentos ?? 200;
+  const filamentosBaixo = DB.filamentoEstoque.filter(r => filamentoPesoLiquido(r) <= limiteFilamentos);
+  const totalBaixoGeral = estoqueBaixo.length + itensBaixo.length + filamentosBaixo.length;
 
   // Totais gerais: só contam pedidos já ENTREGUES (confirmados)
   const pedidosEntreguesTodos = DB.pedidos.filter(p => p.status === 'entregue' && p.pago);
@@ -1178,10 +1184,10 @@ function renderDashboard(){
         <div class="value">${atrasados.length}</div>
         <div class="sub">passaram da data de entrega</div>
       </div>
-      <div class="kpi ${estoqueBaixo.length? 'danger':''}">
+      <div class="kpi ${totalBaixoGeral? 'danger':''}">
         <div class="label">Itens com estoque baixo</div>
-        <div class="value">${estoqueBaixo.length}</div>
-        <div class="sub">com ${limiteEstoque} un. ou menos</div>
+        <div class="value">${totalBaixoGeral}</div>
+        <div class="sub">produtos, itens adicionais e filamentos</div>
       </div>
     </div>
 
@@ -1246,6 +1252,41 @@ function renderDashboard(){
               <td>${esc(p.categoria)||'—'}</td>
               <td class="num stock-low">${estoqueQtd(p.id)} un.</td>
               <td class="num">${limiteEstoque} un.</td>
+            </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>` : ''}
+
+    ${itensBaixo.length ? `
+    <div class="panel">
+      <h2>Itens Adicionais com Estoque Baixo <span class="count">${itensBaixo.length} item(ns)</span></h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th></th><th>Item</th><th class="num">Qtd. atual</th><th class="num">Limite definido</th></tr></thead>
+        <tbody>
+          ${itensBaixo.map(ex=>`
+            <tr>
+              <td style="width:40px;">${produtoThumbHTML(ex, 30)}</td>
+              <td>${esc(ex.nome)}</td>
+              <td class="num stock-low">${estoqueExtraQtd(ex.id)} un.</td>
+              <td class="num">${limiteItensAd} un.</td>
+            </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>` : ''}
+
+    ${filamentosBaixo.length ? `
+    <div class="panel">
+      <h2>Filamentos com Estoque Baixo <span class="count">${filamentosBaixo.length} item(ns)</span></h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th></th><th>Marca</th><th>Material</th><th class="num">Peso líquido</th><th class="num">Limite definido</th></tr></thead>
+        <tbody>
+          ${filamentosBaixo.map(r=>`
+            <tr>
+              <td style="width:24px;"><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${r.corHex||'#666'};border:1px solid var(--border);"></span></td>
+              <td>${esc(r.marca)}</td>
+              <td>${esc(r.material)}</td>
+              <td class="num stock-low">${filamentoPesoLiquido(r).toFixed(0)} g</td>
+              <td class="num">${limiteFilamentos} g</td>
             </tr>`).join('')}
         </tbody>
       </table></div>
@@ -2369,9 +2410,13 @@ function openPedidoForm(id){
 
       <div class="field">
         <label>Pagamento</label>
-        <div style="display:flex; gap:18px;">
-          <label style="display:flex; align-items:center; gap:6px; font-weight:400;"><input type="radio" name="pago" value="0" ${!editing?.pago?'checked':''}> Não pago</label>
-          <label style="display:flex; align-items:center; gap:6px; font-weight:400;"><input type="radio" name="pago" value="1" ${editing?.pago?'checked':''}> Pago</label>
+        <div style="display:flex; gap:18px; align-items:center; flex-wrap:wrap;">
+          <label style="display:flex; align-items:center; gap:6px; font-weight:400;"><input type="radio" name="pago" value="0" id="radioNaoPago" ${!editing?.pago?'checked':''}> Não pago</label>
+          <label style="display:flex; align-items:center; gap:6px; font-weight:400;"><input type="radio" name="pago" value="1" id="radioPago" ${editing?.pago?'checked':''}> Pago</label>
+          <div id="campoDataPagamento" style="display:${editing?.pago?'flex':'none'}; align-items:center; gap:6px;">
+            <label style="font-weight:400; margin:0;">em</label>
+            <input type="date" name="dataPagamento" value="${editing?.dataPagamento||todayISO()}" style="padding:6px 8px;">
+          </div>
         </div>
       </div>
 
@@ -2482,6 +2527,9 @@ function openPedidoForm(id){
     refreshItemsArea();
   });
   document.getElementById('formaPagamentoSelect').addEventListener('change', ()=>{ toggleCartaoFields(); updateTotals(); });
+  document.querySelectorAll('input[name="pago"]').forEach(r=> r.addEventListener('change', ()=>{
+    document.getElementById('campoDataPagamento').style.display = document.getElementById('radioPago').checked ? 'flex' : 'none';
+  }));
   document.querySelector('[name="valorManual"]').addEventListener('input', updateTotals);
   document.querySelector('[name="custoExtra"]').addEventListener('input', updateTotals);
   document.querySelector('[name="taxaCartaoPercent"]').addEventListener('input', updateTotals);
@@ -2512,6 +2560,7 @@ function openPedidoForm(id){
       parcelas: parseInt(f.get('parcelas'),10)||1,
       obs: f.get('obs').trim(),
       pago: f.get('pago')==='1',
+      dataPagamento: f.get('dataPagamento') || '',
       estoqueAdicionado: editing?.estoqueAdicionado || false,
       estoqueDebitado: editing?.estoqueDebitado || false
     };
