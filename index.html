@@ -1149,23 +1149,23 @@ function renderDashboard(){
   const valorBrutoTotal = pedidosEntreguesTodos.reduce((s,p)=> s + pedidoValorBruto(p), 0);
   const lucroLiquidoTotal = pedidosEntreguesTodos.reduce((s,p)=> s + pedidoLucroLiquido(p), 0);
 
-  // Meses disponíveis para o seletor (com base nos pedidos + mês atual)
-  const mesesSet = new Set(DB.pedidos.filter(p=>p.dataPedido).map(p=>p.dataPedido.slice(0,7)));
+  // Meses disponíveis para o seletor (com base na data de entrega dos pedidos + mês atual)
+  const mesesSet = new Set(DB.pedidos.filter(p=>p.dataEntrega||p.dataPedido).map(p=>(p.dataEntrega||p.dataPedido).slice(0,7)));
   mesesSet.add(mesAtual);
   const meses = [...mesesSet].sort().reverse();
   if(!meses.includes(dashboardMes)) dashboardMes = mesAtual;
 
-  // Filtros de pedidos pelo mês selecionado
+  // Filtros pelo mês de ENTREGA selecionado — cada pedido entra no faturamento do mês em que será/foi entregue
   const pedidosValidos = DB.pedidos.filter(p => p.status !== 'cancelado');
-  const pedidosMes = pedidosValidos.filter(p => p.dataPedido && p.dataPedido.slice(0,7) === dashboardMes);
+  const pedidosMes = pedidosValidos.filter(p => (p.dataEntrega||p.dataPedido) && (p.dataEntrega||p.dataPedido).slice(0,7) === dashboardMes);
   const entreguesMes = pedidosMes.filter(p => p.status === 'entregue' && p.pago);
-  const naoEntreguesMes = pedidosMes.filter(p => !(p.status === 'entregue' && p.pago));
+  const pendentesMes = pedidosMes.filter(p => !(p.status === 'entregue' && p.pago));
 
   const brutoJaEntregue = entreguesMes.reduce((s,p) => s + pedidoValorBruto(p), 0);
-  const brutoAEntregar = naoEntreguesMes.reduce((s,p) => s + pedidoValorBruto(p), 0);
+  const brutoAEntregar = pendentesMes.reduce((s,p) => s + pedidoValorBruto(p), 0);
 
   const liquidoJaEntregue = entreguesMes.reduce((s,p) => s + pedidoLucroLiquido(p), 0);
-  const liquidoAEntregar = naoEntreguesMes.reduce((s,p) => s + pedidoLucroLiquido(p), 0);
+  const liquidoAEntregar = pendentesMes.reduce((s,p) => s + pedidoLucroLiquido(p), 0);
 
   const recentes = [...DB.pedidos].sort((a,b)=> (b.dataPedido||'').localeCompare(a.dataPedido||'')).slice(0,6);
 
@@ -1220,7 +1220,7 @@ function renderDashboard(){
       <div class="kpi warn">
         <div class="label">Valor Bruto — A Entregar</div>
         <div class="value" style="font-size:20px">${fmtMoney(brutoAEntregar)}</div>
-        <div class="sub">pedidos pendentes deste mês</div>
+        <div class="sub">pedidos com entrega prevista neste mês</div>
       </div>
       <div class="kpi success">
         <div class="label">Lucro Líquido — Já Entregues</div>
@@ -1230,7 +1230,7 @@ function renderDashboard(){
       <div class="kpi warn">
         <div class="label">Lucro Líquido — A Entregar</div>
         <div class="value" style="font-size:20px">${fmtMoney(liquidoAEntregar)}</div>
-        <div class="sub">pedidos pendentes deste mês</div>
+        <div class="sub">pedidos com entrega prevista neste mês</div>
       </div>
     </div>
 
