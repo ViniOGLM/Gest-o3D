@@ -1700,6 +1700,7 @@ function renderProdutos(){
       <div><h1>Produtos</h1><p>Modelos, preços e estoque das peças que você imprime.</p></div>
       <div style="display:flex; gap:8px;">
         <button class="btn secondary" id="btnCatalogoPDF">📄 Gerar catálogo em PDF</button>
+        <button class="btn secondary" id="btnGerenciarCatMat">🏷️ Categorias e Materiais</button>
         <button class="btn" id="btnNovoProduto">${ICON_PLUS}Novo produto</button>
       </div>
     </div>
@@ -1757,6 +1758,7 @@ function renderProdutos(){
   document.getElementById('btnNovoProduto').addEventListener('click', ()=> openProdutoForm());
   document.getElementById('btnNovoProdutoEmpty')?.addEventListener('click', ()=> openProdutoForm());
   document.getElementById('btnCatalogoPDF')?.addEventListener('click', gerarCatalogoPDF);
+  document.getElementById('btnGerenciarCatMat')?.addEventListener('click', openGerenciarCatMat);
   document.getElementById('buscaProduto').addEventListener('input', e=>{
     produtoFiltro = e.target.value; renderProdutos();
     const el=document.getElementById('buscaProduto'); el.focus(); el.selectionStart = el.value.length;
@@ -1835,6 +1837,110 @@ function openItemExtraForm(id){
     else { obj.id = uid(); DB.itensExtras.push(obj); setEstoqueExtraQtd(obj.id, 0); }
     save(); closeModal(); renderItensAdicionais();
   });
+}
+
+// Gerenciar (criar, editar, excluir) categorias e materiais usados nos produtos
+function openGerenciarCatMat(){
+  function draw(){
+    openModal(`
+      <div class="modal-head"><h3>Categorias e Materiais</h3>
+        <button class="modal-close" id="mClose">${ICON_CLOSE}</button></div>
+
+      <label style="display:block; font-weight:600; font-size:13.5px; margin-bottom:8px;">Categorias</label>
+      <div class="field-row">
+        <div class="field" style="flex:1;"><input type="text" id="inputNovaCategoria" placeholder="Nova categoria"></div>
+        <div style="display:flex; align-items:flex-start;"><button type="button" class="btn secondary" id="btnAddCategoria">${ICON_PLUS}Adicionar</button></div>
+      </div>
+      ${DB.categorias.length ? DB.categorias.map((c,i)=>`
+        <div class="extra-item-row">
+          <input type="text" class="mono" data-editar-categoria="${i}" value="${esc(c)}" style="background:transparent; border:1px solid var(--border); border-radius:6px; padding:6px 8px; color:var(--text);">
+          <span></span>
+          <button type="button" class="icon-btn" data-del-categoria="${i}">${ICON_TRASH}</button>
+        </div>
+      `).join('') : '<p class="hint">Nenhuma categoria cadastrada.</p>'}
+
+      <hr style="border:none; border-top:1px solid var(--border); margin:18px 0;">
+
+      <label style="display:block; font-weight:600; font-size:13.5px; margin-bottom:8px;">Materiais</label>
+      <div class="field-row">
+        <div class="field" style="flex:1;"><input type="text" id="inputNovoMaterial" placeholder="Novo material"></div>
+        <div style="display:flex; align-items:flex-start;"><button type="button" class="btn secondary" id="btnAddMaterial">${ICON_PLUS}Adicionar</button></div>
+      </div>
+      ${DB.materiais.length ? DB.materiais.map((m,i)=>`
+        <div class="extra-item-row">
+          <input type="text" class="mono" data-editar-material="${i}" value="${esc(m)}" style="background:transparent; border:1px solid var(--border); border-radius:6px; padding:6px 8px; color:var(--text);">
+          <span></span>
+          <button type="button" class="icon-btn" data-del-material="${i}">${ICON_TRASH}</button>
+        </div>
+      `).join('') : '<p class="hint">Nenhum material cadastrado.</p>'}
+
+      <div class="modal-actions">
+        <button type="button" class="btn" id="btnConcluirCatMat">Concluir</button>
+      </div>
+    `, true);
+
+    document.getElementById('mClose').addEventListener('click', ()=>{ closeModal(); renderProdutos(); });
+    document.getElementById('btnConcluirCatMat').addEventListener('click', ()=>{ closeModal(); renderProdutos(); });
+
+    document.getElementById('btnAddCategoria').addEventListener('click', ()=>{
+      const val = document.getElementById('inputNovaCategoria').value.trim();
+      if(!val){ alert('Digite o nome da categoria.'); return; }
+      if(DB.categorias.includes(val)){ alert('Essa categoria já existe.'); return; }
+      DB.categorias.push(val);
+      save(); draw();
+    });
+    document.getElementById('btnAddMaterial').addEventListener('click', ()=>{
+      const val = document.getElementById('inputNovoMaterial').value.trim();
+      if(!val){ alert('Digite o nome do material.'); return; }
+      if(DB.materiais.includes(val)){ alert('Esse material já existe.'); return; }
+      DB.materiais.push(val);
+      save(); draw();
+    });
+
+    document.querySelectorAll('[data-editar-categoria]').forEach(inp=>{
+      inp.addEventListener('change', ()=>{
+        const i = Number(inp.dataset.editarCategoria);
+        const antigo = DB.categorias[i];
+        const novo = inp.value.trim();
+        if(!novo){ inp.value = antigo; return; }
+        DB.categorias[i] = novo;
+        DB.produtos.forEach(p=>{ if(p.categoria===antigo) p.categoria = novo; });
+        save(); draw();
+      });
+    });
+    document.querySelectorAll('[data-editar-material]').forEach(inp=>{
+      inp.addEventListener('change', ()=>{
+        const i = Number(inp.dataset.editarMaterial);
+        const antigo = DB.materiais[i];
+        const novo = inp.value.trim();
+        if(!novo){ inp.value = antigo; return; }
+        DB.materiais[i] = novo;
+        DB.produtos.forEach(p=>{ if(p.material===antigo) p.material = novo; });
+        save(); draw();
+      });
+    });
+    document.querySelectorAll('[data-del-categoria]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const i = Number(b.dataset.delCategoria);
+        const nome = DB.categorias[i];
+        const emUso = DB.produtos.filter(p=>p.categoria===nome).length;
+        if(emUso && !confirm(`${emUso} produto(s) usam essa categoria. Excluir mesmo assim?`)) return;
+        DB.categorias.splice(i,1);
+        save(); draw();
+      });
+    });
+    document.querySelectorAll('[data-del-material]').forEach(b=>{
+      b.addEventListener('click', ()=>{
+        const i = Number(b.dataset.delMaterial);
+        const nome = DB.materiais[i];
+        const emUso = DB.produtos.filter(p=>p.material===nome).length;
+        if(emUso && !confirm(`${emUso} produto(s) usam esse material. Excluir mesmo assim?`)) return;
+        DB.materiais.splice(i,1);
+        save(); draw();
+      });
+    });
+  }
+  draw();
 }
 
 function openProdutoForm(id, baseId){
