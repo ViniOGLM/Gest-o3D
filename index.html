@@ -2857,6 +2857,10 @@ function openPedidoForm(id){
     if(newStatus === 'entregue' && !obj.estoqueDebitado){
       itensLimpos.forEach(it => {
         setEstoqueQtd(it.produtoId, estoqueQtd(it.produtoId) - it.qtd);
+        (it.extras||[]).forEach(ex => {
+          const totalExtra = Number(ex.qtd||1) * Number(it.qtd||1);
+          setEstoqueExtraQtd(ex.itemExtraId, estoqueExtraQtd(ex.itemExtraId) - totalExtra);
+        });
       });
       obj.estoqueDebitado = true;
     }
