@@ -30,8 +30,10 @@
     --warn-soft: rgba(242,169,59,0.14);
     --danger: #e15554;
     --danger-soft: rgba(225,85,84,0.14);
-    --success: #6bcb77;
-    --success-soft: rgba(107,203,119,0.14);
+    --success: #7ee089;
+    --success-soft: rgba(126,224,137,0.16);
+    --success-dark: #2f9e50;
+    --success-dark-soft: rgba(47,158,80,0.20);
     --whats: #25d366;
     --radius: 10px;
     --font-ui: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
@@ -210,10 +212,29 @@
   .b-imprimindo{background:rgba(107,157,203,.14); color:#6d9dcb;}
   .b-pos{background:var(--warn-soft); color:var(--warn);}
   .b-pronto{background:var(--success-soft); color:var(--success);}
-  .b-entregue{background:rgba(255,255,255,.06); color:var(--text-muted);}
+  .b-entregue{background:var(--success-dark-soft); color:var(--success-dark);}
   .b-cancelado{background:var(--danger-soft); color:var(--danger);}
 
   .stock-low{color:var(--danger); font-weight:600;}
+
+  /* ---------- multi-select filter chips ---------- */
+  .chip-filters{display:flex; gap:8px; flex-wrap:wrap; align-items:center;}
+  .chip-toggle{
+    cursor:pointer; border:none; font-family:var(--font-mono);
+    transition:opacity .15s ease, box-shadow .15s ease, transform .08s ease;
+  }
+  .chip-toggle.chip-inactive{opacity:.38;}
+  .chip-toggle.chip-active{opacity:1; box-shadow:0 0 0 1.5px currentColor inset;}
+  .chip-toggle:hover{opacity:.85;}
+  .chip-toggle:active{transform:scale(.95);}
+  .chip-clear{
+    background:none; border:none; color:var(--text-muted); font-size:11.5px;
+    cursor:pointer; text-decoration:underline; padding:4px 2px; white-space:nowrap;
+  }
+  .chip-clear:hover{color:var(--text);}
+
+  /* ---------- clickable rows (duplo clique abre o item) ---------- */
+  tbody tr[data-dbl]{cursor:pointer;}
 
   /* ---------- search/filter bar ---------- */
   .toolbar{display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; align-items:center;}
@@ -1381,8 +1402,15 @@ function emptyState(msg, btnId, btnLabel='Adicionar'){
    CLIENTES
    ========================================================= */
 let clienteFiltro = '';
+let clienteFiltroCidade = 'todas';
+let clienteOrdem = 'nome-asc';
 function renderClientes(){
-  const list = DB.clientes.filter(c => (c.nome+' '+c.telefone+' '+c.email+' '+c.cidade).toLowerCase().includes(clienteFiltro.toLowerCase()));
+  let list = DB.clientes.filter(c => (c.nome+' '+c.telefone+' '+c.email+' '+c.cidade).toLowerCase().includes(clienteFiltro.toLowerCase()));
+  if(clienteFiltroCidade!=='todas') list = list.filter(c => (c.cidade||'') === clienteFiltroCidade);
+  const [campoOrdCli, dirOrdCli] = clienteOrdem.split('-');
+  if(campoOrdCli==='pedidos') list = ordenarLista(list.map(c=>({...c, __pedidos: DB.pedidos.filter(p=>p.clienteId===c.id).length})), '__pedidos', dirOrdCli);
+  else list = ordenarLista(list, campoOrdCli, dirOrdCli);
+  const cidadesCliente = [...new Set(DB.clientes.map(c=>c.cidade).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
   pageEl.innerHTML = `
     <div class="page-head">
       <div><h1>Clientes</h1><p>Cadastro de quem encomenda suas peças.</p></div>
@@ -1391,6 +1419,17 @@ function renderClientes(){
     <div class="panel">
       <div class="toolbar">
         <div class="search-box">${ICON_SEARCH}<input id="buscaCliente" placeholder="Buscar por nome, telefone, e-mail ou cidade…" value="${esc(clienteFiltro)}"></div>
+        <select id="filtroCidadeCliente" style="max-width:200px;">
+          <option value="todas">Todas as cidades</option>
+          ${cidadesCliente.map(c=>`<option value="${esc(c)}" ${clienteFiltroCidade===c?'selected':''}>${esc(c)}</option>`).join('')}
+        </select>
+        <select id="selectOrdemCliente" style="max-width:220px; margin-left:auto;">
+          <option value="nome-asc" ${clienteOrdem==='nome-asc'?'selected':''}>Nome (A-Z)</option>
+          <option value="nome-desc" ${clienteOrdem==='nome-desc'?'selected':''}>Nome (Z-A)</option>
+          <option value="cidade-asc" ${clienteOrdem==='cidade-asc'?'selected':''}>Cidade (A-Z)</option>
+          <option value="pedidos-desc" ${clienteOrdem==='pedidos-desc'?'selected':''}>Mais pedidos</option>
+          <option value="pedidos-asc" ${clienteOrdem==='pedidos-asc'?'selected':''}>Menos pedidos</option>
+        </select>
       </div>
       ${list.length ? `<div class="table-wrap"><table>
         <thead><tr><th></th><th>Nome</th><th>Telefone</th><th>E-mail</th><th>Cidade</th><th>Pedidos</th><th></th></tr></thead>
@@ -1398,7 +1437,7 @@ function renderClientes(){
           ${list.map(c=>{
             const n = DB.pedidos.filter(p=>p.clienteId===c.id).length;
             const wLink = whatsappLink(c.telefone);
-            return `<tr>
+            return `<tr data-dbl="${c.id}">
               <td>${avatarHTML(c,32)}</td>
               <td>${esc(c.nome)}</td>
               <td class="mono">${c.telefone?('+55 '+esc(c.telefone)):'—'}</td>
@@ -1413,7 +1452,7 @@ function renderClientes(){
             </tr>`;
           }).join('')}
         </tbody>
-      </table></div>` : emptyState('Nenhum cliente encontrado.', 'btnNovoClienteEmpty')}
+      </table></div>` : emptyState('Nenhum cliente encontrado para este filtro.', 'btnNovoClienteEmpty')}
     </div>
   `;
 
@@ -1423,7 +1462,17 @@ function renderClientes(){
     clienteFiltro = e.target.value; renderClientes();
     const el=document.getElementById('buscaCliente'); el.focus(); el.selectionStart = el.value.length;
   });
+  document.getElementById('filtroCidadeCliente').addEventListener('change', e=>{
+    clienteFiltroCidade = e.target.value; renderClientes();
+  });
+  document.getElementById('selectOrdemCliente').addEventListener('change', e=>{
+    clienteOrdem = e.target.value; renderClientes();
+  });
   pageEl.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> openClienteForm(b.dataset.edit)));
+  pageEl.querySelectorAll('tr[data-dbl]').forEach(tr=> tr.addEventListener('dblclick', e=>{
+    if(e.target.closest('.row-actions')) return;
+    openClienteForm(tr.dataset.dbl);
+  }));
   pageEl.querySelectorAll('[data-whats]').forEach(b=> b.addEventListener('click', ()=>{
     const c = clienteById(b.dataset.whats);
     const link = whatsappLink(c?.telefone);
@@ -1735,7 +1784,7 @@ function renderProdutos(){
             const baixo = qtd <= limiteProdutos;
 
             return `
-            <tr>
+            <tr data-dbl="${p.id}">
               <td style="width:40px;">${produtoThumbHTML(p, 36)}</td>
               <td><b>${esc(p.nome)}</b></td>
               <td>${esc(p.categoria)||'—'}</td>
@@ -1773,6 +1822,10 @@ function renderProdutos(){
   });
   pageEl.querySelectorAll('[data-mod]').forEach(b=> b.addEventListener('click', ()=> openEstoqueModal('produto', b.dataset.mod)));
   pageEl.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> openProdutoForm(b.dataset.edit)));
+  pageEl.querySelectorAll('tr[data-dbl]').forEach(tr=> tr.addEventListener('dblclick', e=>{
+    if(e.target.closest('.row-actions')) return;
+    openProdutoForm(tr.dataset.dbl);
+  }));
   pageEl.querySelectorAll('[data-del]').forEach(b=> b.addEventListener('click', ()=>{
     if(!confirm('Excluir este produto?')) return;
     DB.produtos = DB.produtos.filter(p=>p.id!==b.dataset.del);
@@ -2278,7 +2331,7 @@ function renderItensAdicionais(){
           ${listaOrdenada.map(ex=>{
             const qtd = estoqueExtraQtd(ex.id);
             const baixo = qtd <= limiteItens;
-            return `<tr>
+            return `<tr data-dbl="${ex.id}">
               <td style="width:40px;">${produtoThumbHTML(ex, 36)}</td>
               <td><b>${esc(ex.nome)}</b></td>
               <td class="num mono">${fmtMoney(ex.custo)}</td>
@@ -2305,6 +2358,10 @@ function renderItensAdicionais(){
     save(); renderItensAdicionais();
   });
   pageEl.querySelectorAll('[data-edit-extra]').forEach(b=> b.addEventListener('click', ()=> openItemExtraForm(b.dataset.editExtra)));
+  pageEl.querySelectorAll('tr[data-dbl]').forEach(tr=> tr.addEventListener('dblclick', e=>{
+    if(e.target.closest('.row-actions')) return;
+    openItemExtraForm(tr.dataset.dbl);
+  }));
   pageEl.querySelectorAll('[data-del-extra]').forEach(b=> b.addEventListener('click', ()=>{
     if(!confirm('Excluir este item extra?')) return;
     DB.itensExtras = DB.itensExtras.filter(e=>e.id!==b.dataset.delExtra);
@@ -2345,13 +2402,14 @@ function renderFilamentos(){
       ${DB.filamentoTaras.length ? `<div class="table-wrap"><table>
         <thead><tr><th>Marca</th><th class="num">Tara média</th><th class="num">Amostras</th><th></th></tr></thead>
         <tbody>
-          ${DB.filamentoTaras.map(t=>`
+          ${DB.filamentoTaras.map((t,i)=>`
             <tr>
-              <td><b>${esc(t.marca)}</b></td>
+              <td><input type="text" class="mono" data-editar-marca="${i}" value="${esc(t.marca)}" style="background:transparent; border:1px solid var(--border); border-radius:6px; padding:6px 8px; color:var(--text); font-weight:600; width:100%; max-width:220px;"></td>
               <td class="num mono">${t.amostras.length? filamentoTaraMediaMarca(t.marca).toFixed(1)+' g' : '—'}</td>
               <td class="num mono">${t.amostras.length} amostra(s)</td>
               <td><div class="row-actions">
                 <button class="btn sm secondary" data-gerenciar-tara="${esc(t.marca)}">Ver amostras</button>
+                <button class="icon-btn" data-del-marca="${i}" title="Excluir marca">${ICON_TRASH}</button>
               </div></td>
             </tr>`).join('')}
         </tbody>
@@ -2402,6 +2460,36 @@ function renderFilamentos(){
     save(); renderFilamentos();
   });
   pageEl.querySelectorAll('[data-gerenciar-tara]').forEach(b=> b.addEventListener('click', ()=> openFilamentoTaraManager(b.dataset.gerenciarTara)));
+  pageEl.querySelectorAll('[data-editar-marca]').forEach(inp=>{
+    inp.addEventListener('change', ()=>{
+      const i = Number(inp.dataset.editarMarca);
+      const rec = DB.filamentoTaras[i];
+      const antigo = rec.marca;
+      const novo = inp.value.trim();
+      if(!novo){ inp.value = antigo; return; }
+      if(normalizarMarca(novo) !== normalizarMarca(antigo)){
+        const existente = DB.filamentoTaras.find((t,idx)=> idx!==i && normalizarMarca(t.marca)===normalizarMarca(novo));
+        if(existente){
+          existente.amostras = [...existente.amostras, ...rec.amostras];
+          DB.filamentoTaras.splice(i,1);
+        } else {
+          rec.marca = novo;
+        }
+        DB.filamentoEstoque.forEach(r=>{ if(normalizarMarca(r.marca)===normalizarMarca(antigo)) r.marca = novo; });
+      }
+      save(); renderFilamentos();
+    });
+  });
+  pageEl.querySelectorAll('[data-del-marca]').forEach(b=> b.addEventListener('click', ()=>{
+    const i = Number(b.dataset.delMarca);
+    const marca = DB.filamentoTaras[i]?.marca;
+    if(!marca) return;
+    const emUso = DB.filamentoEstoque.filter(r=> normalizarMarca(r.marca)===normalizarMarca(marca)).length;
+    if(emUso && !confirm(`${emUso} registro(s) de estoque usam a marca "${marca}". Se excluir, a tara dessa marca some e o peso líquido desses registros passa a considerar tara zero. Excluir mesmo assim?`)) return;
+    if(!emUso && !confirm(`Excluir a marca "${marca}"?`)) return;
+    DB.filamentoTaras.splice(i,1);
+    save(); renderFilamentos();
+  }));
   pageEl.querySelectorAll('[data-row-rolo]').forEach(tr=> tr.addEventListener('click', e=>{
     if(e.target.closest('.row-actions')) return;
     openFilamentoCadastroForm(tr.dataset.rowRolo);
@@ -2464,9 +2552,22 @@ function openFilamentoTaraManager(marca){
 function openFilamentoCadastroForm(id){
   const editing = id ? filamentoRoloById(id) : null;
 
+  function atualizarPreviewFilamento(){
+    const marcaAtual = document.getElementById('cfMarca').value;
+    const pesoAtual = document.getElementById('cfPesoBruto').value;
+    const tara = marcaAtual ? filamentoTaraMediaMarca(marcaAtual) : 0;
+    const liquido = Math.max(0, (parseFloat(pesoAtual)||0) - tara);
+    document.getElementById('cfPreviewBox').innerHTML = `
+      <div class="row"><span>Tara aplicada (${esc(marcaAtual)||'—'})</span><b>${tara.toFixed(1)} g</b></div>
+      <div class="row final"><span>Peso líquido</span><b>${liquido.toFixed(0)} g</b></div>
+    `;
+    const avisoEl = document.getElementById('cfAvisoTara');
+    if(avisoEl) avisoEl.style.display = (!filamentoTaraByMarca(marcaAtual) && marcaAtual) ? '' : 'none';
+  }
+
   function draw(){
-    const marcaAtual = document.getElementById('cfMarca')?.value ?? editing?.marca ?? '';
-    const pesoAtual = document.getElementById('cfPesoBruto')?.value ?? editing?.pesoBruto ?? '';
+    const marcaAtual = editing?.marca ?? '';
+    const pesoAtual = editing?.pesoBruto ?? '';
     const tara = marcaAtual ? filamentoTaraMediaMarca(marcaAtual) : 0;
     const liquido = Math.max(0, (parseFloat(pesoAtual)||0) - tara);
 
@@ -2487,11 +2588,11 @@ function openFilamentoCadastroForm(id){
           <div class="field"><label>Peso bruto — carretel + filamento (g) *</label><input id="cfPesoBruto" name="pesoBruto" type="number" min="0" step="1" required value="${editing?.pesoBruto??''}"></div>
           <div class="field"><label>Observação</label><input name="obs" type="text" value="${esc(editing?.obs||'')}"></div>
         </div>
-        <div class="totals-box" style="margin-bottom:8px;">
+        <div class="totals-box" id="cfPreviewBox" style="margin-bottom:8px;">
           <div class="row"><span>Tara aplicada (${esc(marcaAtual)||'—'})</span><b>${tara.toFixed(1)} g</b></div>
           <div class="row final"><span>Peso líquido</span><b>${liquido.toFixed(0)} g</b></div>
         </div>
-        ${!filamentoTaraByMarca(marcaAtual) && marcaAtual ? `<p class="hint" style="color:var(--warn);">Essa marca ainda não tem tara cadastrada — o peso líquido será calculado como 0 até você adicionar uma amostra no painel "Tara por Marca".</p>` : ''}
+        <p class="hint" id="cfAvisoTara" style="color:var(--warn); ${!filamentoTaraByMarca(marcaAtual) && marcaAtual ? '' : 'display:none;'}">Essa marca ainda não tem tara cadastrada — o peso líquido será calculado como 0 até você adicionar uma amostra no painel "Tara por Marca".</p>
         <div class="modal-actions">
           ${editing? `<button type="button" class="btn ghost" id="btnExcluirRolo" style="color:var(--danger);">Excluir</button>` : `<button type="button" class="btn secondary" id="mCancel">Cancelar</button>`}
           <button type="submit" class="btn">${editing?'Salvar alterações':'Cadastrar'}</button>
@@ -2505,8 +2606,8 @@ function openFilamentoCadastroForm(id){
       DB.filamentoEstoque = DB.filamentoEstoque.filter(r=>r.id!==editing.id);
       save(); closeModal(); renderFilamentos();
     });
-    document.getElementById('cfMarca').addEventListener('input', draw);
-    document.getElementById('cfPesoBruto').addEventListener('input', draw);
+    document.getElementById('cfMarca').addEventListener('input', atualizarPreviewFilamento);
+    document.getElementById('cfPesoBruto').addEventListener('input', atualizarPreviewFilamento);
     document.getElementById('formFilamento').addEventListener('submit', e=>{
       e.preventDefault();
       const f = new FormData(e.target);
@@ -2526,13 +2627,13 @@ function openFilamentoCadastroForm(id){
   }
   draw();
 }
-let pedidoFiltroStatus = 'todos';
+let pedidoFiltroStatus = new Set(); // vazio = mostra todos os status
 let pedidoBusca = '';
 let pedidoOrdem = 'dataEntrega-asc';
 
 function renderPedidos(){
   let list = [...DB.pedidos];
-  if(pedidoFiltroStatus!=='todos') list = list.filter(p=>p.status===pedidoFiltroStatus);
+  if(pedidoFiltroStatus.size>0) list = list.filter(p=>pedidoFiltroStatus.has(p.status));
   if(pedidoBusca) list = list.filter(p=> clienteNome(p.clienteId).toLowerCase().includes(pedidoBusca.toLowerCase()));
   const [campoOrd, dirOrd] = pedidoOrdem.split('-');
   if(campoOrd==='cliente') list = ordenarLista(list.map(p=>({...p, __cliente:clienteNome(p.clienteId)})), '__cliente', dirOrd);
@@ -2547,10 +2648,13 @@ function renderPedidos(){
     <div class="panel">
       <div class="toolbar">
         <div class="search-box">${ICON_SEARCH}<input id="buscaPedido" placeholder="Buscar por cliente…" value="${esc(pedidoBusca)}"></div>
-        <select id="filtroStatus" style="max-width:200px">
-          <option value="todos" ${pedidoFiltroStatus==='todos'?'selected':''}>Todos os status</option>
-          ${STATUS_LIST.map(s=>`<option value="${s.id}" ${pedidoFiltroStatus===s.id?'selected':''}>${s.label}</option>`).join('')}
-        </select>
+        <div class="chip-filters">
+          ${STATUS_LIST.map(s=>{
+            const ativo = pedidoFiltroStatus.size===0 || pedidoFiltroStatus.has(s.id);
+            return `<button type="button" class="badge ${s.cls} chip-toggle ${ativo?'chip-active':'chip-inactive'}" data-status-chip="${s.id}" title="Mostrar/ocultar ${s.label}">${s.label}</button>`;
+          }).join('')}
+          ${pedidoFiltroStatus.size>0 ? `<button type="button" class="chip-clear" id="btnLimparStatus">Limpar filtro ✕</button>` : ''}
+        </div>
         <select id="selectOrdemPedido" style="max-width:220px; margin-left:auto;">
           <option value="dataEntrega-asc" ${pedidoOrdem==='dataEntrega-asc'?'selected':''}>Entrega (mais próxima)</option>
           <option value="dataEntrega-desc" ${pedidoOrdem==='dataEntrega-desc'?'selected':''}>Entrega (mais distante)</option>
@@ -2569,7 +2673,7 @@ function renderPedidos(){
             const itensResumo = (p.itens||[]).map(it=> produtoById(it.produtoId)?.nome || '—').join(', ') || '—';
             const cli = clienteById(p.clienteId);
             const wLink = whatsappLink(cli?.telefone);
-            return `<tr>
+            return `<tr data-dbl="${p.id}">
               <td>${esc(clienteNome(p.clienteId))}</td>
               <td>${esc(itensResumo)}</td>
               <td class="mono" style="${atrasado?'color:var(--danger); font-weight:600;':''}">${fmtDate(p.dataEntrega)}${atrasado?' ⚠':''}</td>
@@ -2594,9 +2698,18 @@ function renderPedidos(){
     pedidoBusca=e.target.value; renderPedidos();
     const el=document.getElementById('buscaPedido'); el.focus(); el.selectionStart = el.value.length;
   });
-  document.getElementById('filtroStatus').addEventListener('change', e=>{ pedidoFiltroStatus=e.target.value; renderPedidos(); });
+  pageEl.querySelectorAll('[data-status-chip]').forEach(b=> b.addEventListener('click', ()=>{
+    const id = b.dataset.statusChip;
+    if(pedidoFiltroStatus.has(id)) pedidoFiltroStatus.delete(id); else pedidoFiltroStatus.add(id);
+    renderPedidos();
+  }));
+  document.getElementById('btnLimparStatus')?.addEventListener('click', ()=>{ pedidoFiltroStatus.clear(); renderPedidos(); });
   document.getElementById('selectOrdemPedido').addEventListener('change', e=>{ pedidoOrdem=e.target.value; renderPedidos(); });
   pageEl.querySelectorAll('[data-view]').forEach(b=> b.addEventListener('click', ()=> openPedidoForm(b.dataset.view)));
+  pageEl.querySelectorAll('tr[data-dbl]').forEach(tr=> tr.addEventListener('dblclick', e=>{
+    if(e.target.closest('.row-actions')) return;
+    openPedidoForm(tr.dataset.dbl);
+  }));
   pageEl.querySelectorAll('[data-whats]').forEach(b=> b.addEventListener('click', ()=>{
     const p = DB.pedidos.find(p=>p.id===b.dataset.whats);
     const cli = clienteById(p?.clienteId);
