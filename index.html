@@ -236,6 +236,21 @@
   /* ---------- clickable rows (duplo clique abre o item) ---------- */
   tbody tr[data-dbl]{cursor:pointer;}
 
+  /* ---------- painéis sanfona (collapsible) ---------- */
+  details.panel > summary{
+    list-style:none; cursor:pointer; margin:0 0 14px 0;
+    font-size:15px; font-weight:600; color:var(--text);
+    display:flex; align-items:center; gap:10px; flex-wrap:wrap;
+  }
+  details.panel > summary::-webkit-details-marker{ display:none; }
+  details.panel > summary::marker{ content:''; }
+  details.panel:not([open]) > summary{ margin-bottom:0; }
+  details.panel > summary:hover{ color:var(--accent); }
+  details.panel > summary .count{font-family:var(--font-mono); color:var(--text-muted); font-size:11.5px; font-weight:500;}
+  details.panel > summary .chev{ margin-left:auto; color:var(--text-muted); transition:transform .2s ease; flex-shrink:0; display:flex; }
+  details.panel > summary .chev svg{ width:16px; height:16px; display:block; }
+  details.panel[open] > summary .chev{ transform:rotate(180deg); }
+
   /* ---------- search/filter bar ---------- */
   .toolbar{display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; align-items:center;}
   .search-box{
@@ -523,6 +538,10 @@ function normalizeDB(db){
     if(p.categoria && !db.categorias.includes(p.categoria)) db.categorias.push(p.categoria);
     if(p.material && !db.materiais.includes(p.material)) db.materiais.push(p.material);
   });
+  // Migra materiais já digitados nos registros de estoque de filamento (campo antes era texto livre)
+  (db.filamentoEstoque||[]).forEach(r=>{
+    if(r.material && !db.materiais.includes(r.material)) db.materiais.push(r.material);
+  });
 
   // Migração: estoque referenciando tipoId (formato antigo) -> registro único e completo (novo)
   db.filamentoEstoque = (db.filamentoEstoque||[]).map(r=>{
@@ -531,10 +550,11 @@ function normalizeDB(db){
       return {
         id: r.id, marca: tipo?.marca||'—', material: tipo?.material||'—',
         preco: tipo?.preco||0, corHex: tipo?.corHex||'#3fc1b0',
+        cores: tipo?.corHex ? [{nome:'', hex:tipo.corHex}] : [{nome:'', hex:'#3fc1b0'}],
         pesoBruto: r.pesoBruto||0, obs: r.obs||'', dataRegistro: r.dataRegistro||todayISO()
       };
     }
-    return { corHex:'#3fc1b0', preco:0, obs:'', ...r };
+    return { corHex:'#3fc1b0', preco:0, obs:'', cores: r.cores || (r.corHex ? [{nome:'', hex:r.corHex}] : [{nome:'', hex:'#3fc1b0'}]), ...r };
   });
   delete db.filamentoTipos;
 
@@ -963,6 +983,16 @@ function filamentoPesoLiquido(rolo){
   const tara = filamentoTaraMediaMarca(rolo.marca);
   return Math.max(0, Number(rolo.pesoBruto||0) - tara);
 }
+// Lista de cores de um rolo (compatível com registros antigos que só tinham corHex único)
+function filamentoCoresLista(rolo){
+  if(rolo.cores && rolo.cores.length) return rolo.cores;
+  return [{nome:'', hex: rolo.corHex || '#666'}];
+}
+function filamentoCoresChipsHTML(rolo){
+  return filamentoCoresLista(rolo).map(c=>
+    `<span class="color-chip"><span class="swatch" style="background:${c.hex||'#3fc1b0'};"></span>${c.nome? esc(c.nome) : ''}</span>`
+  ).join(' ');
+}
 
 function estoqueQtd(produtoId){
   const st = DB.estoque.find(e => e.produtoId === produtoId);
@@ -1139,6 +1169,7 @@ const ICON_PLUS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" st
 const ICON_SEARCH = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4.3-4.3"/></svg>`;
 const ICON_EMPTY = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M21 8 12 3 3 8l9 5 9-5Z"/><path d="M3 8v8l9 5 9-5V8"/></svg>`;
 const ICON_WHATS = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 11.5a8.5 8.5 0 0 1-8.5 8.5 8.4 8.4 0 0 1-4.1-1.05L3 20l1.1-5.2A8.5 8.5 0 1 1 21 11.5Z"/></svg>`;
+const ICON_CHEVRON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m6 9 6 6 6-6"/></svg>`;
 
 /* =========================================================
    DASHBOARD
@@ -2374,9 +2405,23 @@ function renderItensAdicionais(){
 /* =========================================================
    FILAMENTOS (TARA POR MARCA + ESTOQUE ÚNICO E UNIFICADO)
    ========================================================= */
+let filamentoAberto = { materiais:true, taras:true, estoque:true }; // estado aberto/fechado dos painéis sanfona
+let filamentoEstoqueBusca = '';
+let filamentoEstoqueFiltroMaterial = 'todos';
+let filamentoEstoqueOrdem = 'data-desc';
+
 function renderFilamentos(){
   const totalLiquido = DB.filamentoEstoque.reduce((s,r)=> s + filamentoPesoLiquido(r), 0);
   const limiteFilamentos = DB.config.limiteBaixoFilamentos ?? 200;
+
+  let listaEstoque = [...DB.filamentoEstoque];
+  if(filamentoEstoqueBusca) listaEstoque = listaEstoque.filter(r=> (r.marca+' '+r.material+' '+filamentoCoresLista(r).map(c=>c.nome).join(' ')).toLowerCase().includes(filamentoEstoqueBusca.toLowerCase()));
+  if(filamentoEstoqueFiltroMaterial!=='todos') listaEstoque = listaEstoque.filter(r=> r.material===filamentoEstoqueFiltroMaterial);
+  const [campoOrdFil, dirOrdFil] = filamentoEstoqueOrdem.split('-');
+  if(campoOrdFil==='liquido') listaEstoque = ordenarLista(listaEstoque.map(r=>({...r, __liquido: filamentoPesoLiquido(r)})), '__liquido', dirOrdFil);
+  else if(campoOrdFil==='data') listaEstoque = ordenarLista(listaEstoque, 'dataRegistro', dirOrdFil);
+  else listaEstoque = ordenarLista(listaEstoque, campoOrdFil, dirOrdFil);
+  const materiaisPresentesEstoque = [...new Set(DB.filamentoEstoque.map(r=>r.material).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
 
   pageEl.innerHTML = `
     <div class="page-head">
@@ -2390,8 +2435,32 @@ function renderFilamentos(){
       <button class="btn sm secondary" id="btnSalvarLimiteFilamentos">Definir limite</button>
     </div>
 
-    <div class="panel">
-      <h2>Tara por Marca <span class="count">${DB.filamentoTaras.length} marca(s)</span></h2>
+    <details class="panel" id="panelMateriaisFilamento" ${filamentoAberto.materiais?'open':''}>
+      <summary>Tipos de Material <span class="count">${DB.materiais.length} tipo(s)</span><span class="chev">${ICON_CHEVRON}</span></summary>
+      <p class="hint" style="margin:0 0 12px 0;">Esta lista é a mesma usada no campo Material dos Produtos — cadastre aqui os tipos que você imprime (PLA, PETG, ABS…).</p>
+      <div class="field-row">
+        <div class="field" style="flex:1;"><input type="text" id="inputNovoMaterialFilamento" placeholder="Novo tipo de material (ex.: PLA, PETG, ABS…)"></div>
+        <div style="display:flex; align-items:flex-start;"><button type="button" class="btn secondary" id="btnAddMaterialFilamento">${ICON_PLUS}Adicionar</button></div>
+      </div>
+      ${DB.materiais.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Material</th><th class="num">Em uso</th><th></th></tr></thead>
+        <tbody>
+          ${DB.materiais.map((m,i)=>{
+            const emUso = DB.filamentoEstoque.filter(r=>r.material===m).length + DB.produtos.filter(p=>p.material===m).length;
+            return `<tr>
+              <td><input type="text" class="mono" data-editar-material-fil="${i}" value="${esc(m)}" style="background:transparent; border:1px solid var(--border); border-radius:6px; padding:6px 8px; color:var(--text); font-weight:600; width:100%; max-width:220px;"></td>
+              <td class="num mono">${emUso}</td>
+              <td><div class="row-actions">
+                <button class="icon-btn" data-del-material-fil="${i}" title="Excluir material">${ICON_TRASH}</button>
+              </div></td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table></div>` : '<p class="hint">Nenhum tipo de material cadastrado ainda.</p>'}
+    </details>
+
+    <details class="panel" id="panelTaraMarca" ${filamentoAberto.taras?'open':''}>
+      <summary>Tara por Marca <span class="count">${DB.filamentoTaras.length} marca(s)</span><span class="chev">${ICON_CHEVRON}</span></summary>
       <p class="hint" style="margin:0 0 12px 0;">Abasteça aqui os pesos de carretéis vazios — o app identifica a marca e calcula a tara média automaticamente, sem precisar repetir amostras para cada material.</p>
       <div class="field-row">
         <div class="field"><input type="text" id="inputTaraMarca" placeholder="Marca (ex.: Voolt3D)" list="listaMarcasTara"></div>
@@ -2414,20 +2483,35 @@ function renderFilamentos(){
             </tr>`).join('')}
         </tbody>
       </table></div>` : '<p class="hint">Nenhuma marca com tara cadastrada ainda.</p>'}
-    </div>
+    </details>
 
-    <div class="panel">
-      <h2>Estoque Atual <span class="count">${DB.filamentoEstoque.length} registro(s) — total líquido: ${totalLiquido.toFixed(0)} g</span></h2>
-      ${DB.filamentoEstoque.length ? `<div class="table-wrap"><table>
-        <thead><tr><th></th><th>Marca</th><th>Material</th><th class="num">Preço</th><th class="num">Peso bruto</th><th class="num">Tara</th><th class="num">Peso líquido</th><th></th></tr></thead>
+    <details class="panel" id="panelEstoqueFilamento" ${filamentoAberto.estoque?'open':''}>
+      <summary>Estoque Atual <span class="count">${DB.filamentoEstoque.length} registro(s) — total líquido: ${totalLiquido.toFixed(0)} g</span><span class="chev">${ICON_CHEVRON}</span></summary>
+      ${DB.filamentoEstoque.length ? `<div class="toolbar" style="margin-bottom:14px;">
+        <div class="search-box">${ICON_SEARCH}<input id="buscaFilamentoEstoque" placeholder="Buscar por marca, material ou cor…" value="${esc(filamentoEstoqueBusca)}"></div>
+        <select id="filtroMaterialEstoqueFil" style="max-width:200px;">
+          <option value="todos">Todos os materiais</option>
+          ${materiaisPresentesEstoque.map(m=>`<option value="${esc(m)}" ${filamentoEstoqueFiltroMaterial===m?'selected':''}>${esc(m)}</option>`).join('')}
+        </select>
+        <select id="selectOrdemFilamentoEstoque" style="max-width:220px; margin-left:auto;">
+          <option value="data-desc" ${filamentoEstoqueOrdem==='data-desc'?'selected':''}>Mais recente</option>
+          <option value="data-asc" ${filamentoEstoqueOrdem==='data-asc'?'selected':''}>Mais antigo</option>
+          <option value="marca-asc" ${filamentoEstoqueOrdem==='marca-asc'?'selected':''}>Marca (A-Z)</option>
+          <option value="marca-desc" ${filamentoEstoqueOrdem==='marca-desc'?'selected':''}>Marca (Z-A)</option>
+          <option value="liquido-desc" ${filamentoEstoqueOrdem==='liquido-desc'?'selected':''}>Peso líquido (maior-menor)</option>
+          <option value="liquido-asc" ${filamentoEstoqueOrdem==='liquido-asc'?'selected':''}>Peso líquido (menor-maior)</option>
+        </select>
+      </div>` : ''}
+      ${listaEstoque.length ? `<div class="table-wrap"><table>
+        <thead><tr><th>Marca</th><th>Material</th><th>Cor(es)</th><th class="num">Preço</th><th class="num">Peso bruto</th><th class="num">Tara</th><th class="num">Peso líquido</th><th></th></tr></thead>
         <tbody>
-          ${[...DB.filamentoEstoque].sort((a,b)=>(b.dataRegistro||'').localeCompare(a.dataRegistro||'')).map(r=>{
+          ${listaEstoque.map(r=>{
             const tara = filamentoTaraMediaMarca(r.marca);
             const liquido = filamentoPesoLiquido(r);
             return `<tr style="cursor:pointer;" data-row-rolo="${r.id}">
-              <td style="width:24px;"><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${r.corHex||'#666'};border:1px solid var(--border);"></span></td>
               <td><b>${esc(r.marca)}</b></td>
               <td>${esc(r.material)}</td>
+              <td>${filamentoCoresChipsHTML(r)}</td>
               <td class="num mono">${r.preco? fmtMoney(r.preco) : '—'}</td>
               <td class="num mono">${Number(r.pesoBruto||0).toFixed(0)} g</td>
               <td class="num mono">${tara.toFixed(1)} g</td>
@@ -2438,8 +2522,8 @@ function renderFilamentos(){
             </tr>`;
           }).join('')}
         </tbody>
-      </table></div>` : emptyState('Nenhum filamento cadastrado ainda.', 'btnCadastroFilamentoEmpty')}
-    </div>
+      </table></div>` : (DB.filamentoEstoque.length ? '<p class="hint" style="padding:16px 0 4px;">Nenhum filamento encontrado para este filtro.</p>' : emptyState('Nenhum filamento cadastrado ainda.', 'btnCadastroFilamentoEmpty'))}
+    </details>
   `;
 
   document.getElementById('btnCadastroFilamento').addEventListener('click', ()=> openFilamentoCadastroForm());
@@ -2449,6 +2533,44 @@ function renderFilamentos(){
     DB.config.limiteBaixoFilamentos = isNaN(val) ? 200 : Math.max(0, val);
     save(); renderFilamentos();
   });
+
+  // painéis sanfona: lembram se estão abertos/fechados entre re-renderizações
+  document.getElementById('panelMateriaisFilamento').addEventListener('toggle', e=>{ filamentoAberto.materiais = e.target.open; });
+  document.getElementById('panelTaraMarca').addEventListener('toggle', e=>{ filamentoAberto.taras = e.target.open; });
+  document.getElementById('panelEstoqueFilamento').addEventListener('toggle', e=>{ filamentoAberto.estoque = e.target.open; });
+
+  // ---- Tipos de Material ----
+  document.getElementById('btnAddMaterialFilamento').addEventListener('click', ()=>{
+    const val = document.getElementById('inputNovoMaterialFilamento').value.trim();
+    if(!val){ alert('Digite o nome do material.'); return; }
+    if(DB.materiais.includes(val)){ alert('Esse material já existe.'); return; }
+    DB.materiais.push(val);
+    save(); renderFilamentos();
+  });
+  pageEl.querySelectorAll('[data-editar-material-fil]').forEach(inp=>{
+    inp.addEventListener('change', ()=>{
+      const i = Number(inp.dataset.editarMaterialFil);
+      const antigo = DB.materiais[i];
+      const novo = inp.value.trim();
+      if(!novo){ inp.value = antigo; return; }
+      if(novo!==antigo && DB.materiais.includes(novo)){ alert('Já existe um material com esse nome.'); inp.value = antigo; return; }
+      DB.materiais[i] = novo;
+      DB.produtos.forEach(p=>{ if(p.material===antigo) p.material = novo; });
+      DB.filamentoEstoque.forEach(r=>{ if(r.material===antigo) r.material = novo; });
+      save(); renderFilamentos();
+    });
+  });
+  pageEl.querySelectorAll('[data-del-material-fil]').forEach(b=> b.addEventListener('click', ()=>{
+    const i = Number(b.dataset.delMaterialFil);
+    const nome = DB.materiais[i];
+    const emUso = DB.filamentoEstoque.filter(r=>r.material===nome).length + DB.produtos.filter(p=>p.material===nome).length;
+    if(emUso && !confirm(`${emUso} registro(s) (produtos e/ou filamentos) usam esse material. Excluir mesmo assim?`)) return;
+    if(!emUso && !confirm(`Excluir o material "${nome}"?`)) return;
+    DB.materiais.splice(i,1);
+    save(); renderFilamentos();
+  }));
+
+  // ---- Tara por Marca ----
   document.getElementById('btnAddTaraMarca').addEventListener('click', ()=>{
     const marca = document.getElementById('inputTaraMarca').value.trim();
     const peso = parseFloat(document.getElementById('inputTaraPeso').value);
@@ -2490,6 +2612,18 @@ function renderFilamentos(){
     DB.filamentoTaras.splice(i,1);
     save(); renderFilamentos();
   }));
+
+  // ---- Estoque Atual ----
+  document.getElementById('buscaFilamentoEstoque')?.addEventListener('input', e=>{
+    filamentoEstoqueBusca = e.target.value; renderFilamentos();
+    const el=document.getElementById('buscaFilamentoEstoque'); if(el){ el.focus(); el.selectionStart = el.value.length; }
+  });
+  document.getElementById('filtroMaterialEstoqueFil')?.addEventListener('change', e=>{
+    filamentoEstoqueFiltroMaterial = e.target.value; renderFilamentos();
+  });
+  document.getElementById('selectOrdemFilamentoEstoque')?.addEventListener('change', e=>{
+    filamentoEstoqueOrdem = e.target.value; renderFilamentos();
+  });
   pageEl.querySelectorAll('[data-row-rolo]').forEach(tr=> tr.addEventListener('click', e=>{
     if(e.target.closest('.row-actions')) return;
     openFilamentoCadastroForm(tr.dataset.rowRolo);
@@ -2548,9 +2682,44 @@ function openFilamentoTaraManager(marca){
   draw();
 }
 
-// Cadastro / edição direta de um registro de estoque de filamento (marca, material, preço, peso, obs)
+// Cadastro / edição direta de um registro de estoque de filamento (marca, material, preço, peso, obs, cores)
 function openFilamentoCadastroForm(id){
   const editing = id ? filamentoRoloById(id) : null;
+  let coresFil = editing ? JSON.parse(JSON.stringify(filamentoCoresLista(editing))) : [{nome:'', hex:'#3fc1b0'}];
+
+  function renderCoresFilList(){
+    const area = document.getElementById('coresFilArea');
+    if(!area) return;
+    area.innerHTML = coresFil.map((c, idx) => `
+      <div class="color-row">
+        <input type="color" class="color-hex-fil" data-idx="${idx}" value="${c.hex||'#3fc1b0'}" style="width:40px; height:34px; padding:2px; cursor:pointer;">
+        <input type="text" class="color-nome-fil" data-idx="${idx}" value="${esc(c.nome)}" placeholder="Nome da cor (ex: Azul, Dourado)">
+        <button type="button" class="icon-btn remove-color-fil" data-idx="${idx}">${ICON_CLOSE}</button>
+      </div>
+    `).join('');
+    area.querySelectorAll('.color-hex-fil').forEach(inp => {
+      inp.addEventListener('input', e => { coresFil[e.target.dataset.idx].hex = e.target.value; });
+    });
+    area.querySelectorAll('.color-nome-fil').forEach(inp => {
+      inp.addEventListener('input', e => {
+        const idx = e.target.dataset.idx;
+        coresFil[idx].nome = e.target.value;
+        const hexAuto = corPorNome(e.target.value);
+        if(hexAuto){
+          coresFil[idx].hex = hexAuto;
+          const hexInput = area.querySelector(`.color-hex-fil[data-idx="${idx}"]`);
+          if(hexInput) hexInput.value = hexAuto;
+        }
+      });
+    });
+    area.querySelectorAll('.remove-color-fil').forEach(btn => {
+      btn.addEventListener('click', e => {
+        const idx = Number(e.currentTarget.dataset.idx);
+        coresFil.splice(idx, 1);
+        renderCoresFilList();
+      });
+    });
+  }
 
   function atualizarPreviewFilamento(){
     const marcaAtual = document.getElementById('cfMarca').value;
@@ -2577,13 +2746,27 @@ function openFilamentoCadastroForm(id){
       <form id="formFilamento">
         <div class="field-row">
           <div class="field"><label>Marca *</label><input id="cfMarca" name="marca" required value="${esc(marcaAtual)}" placeholder="Ex.: Voolt3D" list="listaMarcasCadastro"></div>
-          <div class="field"><label>Material *</label><input name="material" required value="${esc(editing?.material||'')}" placeholder="Ex.: PLA, PETG, ABS…"></div>
+          <div class="field"><label>Material *</label>
+            <div style="display:flex; gap:6px;">
+              <select name="material" id="cfMaterialSelect" required style="flex:1;">
+                <option value="">Selecione…</option>
+                ${DB.materiais.map(m=>`<option value="${esc(m)}" ${editing?.material===m?'selected':''}>${esc(m)}</option>`).join('')}
+              </select>
+              <button type="button" class="btn ghost sm" id="btnNovoMaterialFilCad">${ICON_PLUS}</button>
+            </div>
+          </div>
         </div>
         <datalist id="listaMarcasCadastro">${DB.filamentoTaras.map(t=>`<option value="${esc(t.marca)}">`).join('')}</datalist>
-        <div class="field-row">
-          <div class="field"><label>Preço (R$)</label><input name="preco" type="number" step="0.01" min="0" value="${editing?.preco??''}" placeholder="Preço do rolo/kg"></div>
-          <div class="field"><label>Cor</label><input name="corHex" type="color" value="${editing?.corHex||'#3fc1b0'}" style="padding:4px; height:38px;"></div>
+
+        <div class="field"><label>Preço (R$)</label><input name="preco" type="number" step="0.01" min="0" value="${editing?.preco??''}" placeholder="Preço do rolo/kg"></div>
+
+        <div class="field">
+          <label>Cor(es) do Filamento</label>
+          <div id="coresFilArea"></div>
+          <button type="button" class="btn ghost sm" id="btnAddColorFil" style="margin-top:6px;">${ICON_PLUS}Adicionar cor</button>
+          <p class="hint">Filamento de uma cor só? Deixe apenas uma linha. Para duo color ou multicolor, adicione duas ou mais — ao digitar o nome da cor (ex.: "Azul", "Dourado"), a cor é preenchida automaticamente.</p>
         </div>
+
         <div class="field-row">
           <div class="field"><label>Peso bruto — carretel + filamento (g) *</label><input id="cfPesoBruto" name="pesoBruto" type="number" min="0" step="1" required value="${editing?.pesoBruto??''}"></div>
           <div class="field"><label>Observação</label><input name="obs" type="text" value="${esc(editing?.obs||'')}"></div>
@@ -2608,15 +2791,32 @@ function openFilamentoCadastroForm(id){
     });
     document.getElementById('cfMarca').addEventListener('input', atualizarPreviewFilamento);
     document.getElementById('cfPesoBruto').addEventListener('input', atualizarPreviewFilamento);
+    document.getElementById('btnNovoMaterialFilCad').addEventListener('click', ()=>{
+      const novo = prompt('Nome do novo material:');
+      if(!novo || !novo.trim()) return;
+      if(!DB.materiais.includes(novo.trim())) DB.materiais.push(novo.trim());
+      save();
+      const sel = document.getElementById('cfMaterialSelect');
+      sel.innerHTML = `<option value="">Selecione…</option>${DB.materiais.map(m=>`<option value="${esc(m)}">${esc(m)}</option>`).join('')}`;
+      sel.value = novo.trim();
+    });
+    renderCoresFilList();
+    document.getElementById('btnAddColorFil').addEventListener('click', ()=>{
+      coresFil.push({nome:'', hex:'#3fc1b0'});
+      renderCoresFilList();
+    });
     document.getElementById('formFilamento').addEventListener('submit', e=>{
       e.preventDefault();
       const f = new FormData(e.target);
       const marca = f.get('marca').trim(), material = f.get('material').trim();
       if(!marca || !material){ alert('Preencha marca e material.'); return; }
+      const coresFinal = coresFil.filter(c=>c.hex);
+      if(!coresFinal.length) coresFinal.push({nome:'', hex:'#3fc1b0'});
       const obj = {
         marca, material,
         preco: parseFloat(f.get('preco'))||0,
-        corHex: f.get('corHex'),
+        cores: coresFinal,
+        corHex: coresFinal[0].hex,
         pesoBruto: parseFloat(f.get('pesoBruto'))||0,
         obs: (f.get('obs')||'').trim()
       };
@@ -2761,7 +2961,12 @@ function openPedidoForm(id){
           ${DB.itensExtras.map(ex=>`<option value="${ex.id}">${esc(ex.nome)} — ${fmtMoney(ex.custo)}</option>`).join('')}
         </select>
       </div>
-      <div class="item-cost-preview">Custo deste item (produto + extras × qtd): <b>${fmtMoney(custoItem)}</b></div>
+      <div style="display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap;">
+        <label style="margin:0; font-weight:400; font-size:12.5px; color:var(--text-muted); white-space:nowrap;">Data de entrega deste produto:</label>
+        <input class="it-data-entrega" type="date" value="${it.dataEntrega||''}" style="padding:5px 8px; max-width:165px;">
+        <span class="hint" style="margin:0;">(opcional — deixe em branco para usar a entrega geral do pedido)</span>
+      </div>
+      <div class="item-cost-preview">Custo deste item (produto + extras × qtd): <b>${fmtMoney(custoItem)}</b>${it.dataEntrega?` · Entrega: <b>${fmtDate(it.dataEntrega)}</b>`:''}</div>
     </div>`;
   }
 
@@ -2771,7 +2976,7 @@ function openPedidoForm(id){
 
   function pedidoRascunho(f){
     return {
-      itens: itens.filter(it=>it.produtoId).map(it=>({produtoId:it.produtoId, qtd:Number(it.qtd)||1, preco:Number(it.preco)||0, extras:it.extras||[]})),
+      itens: itens.filter(it=>it.produtoId).map(it=>({produtoId:it.produtoId, qtd:Number(it.qtd)||1, preco:Number(it.preco)||0, extras:it.extras||[], dataEntrega:it.dataEntrega||''})),
       valorManual: parseFloat(f.get('valorManual'))||0,
       formaPagamento: f.get('formaPagamento'),
       custoExtra: parseFloat(f.get('custoExtra'))||0,
@@ -2890,6 +3095,7 @@ function openPedidoForm(id){
       });
       card.querySelector('.it-qtd').addEventListener('input', e=>{ itens[idx].qtd = e.target.value; updateTotals(); });
       card.querySelector('.it-preco').addEventListener('input', e=>{ itens[idx].preco = e.target.value; updateTotals(); });
+      card.querySelector('.it-data-entrega').addEventListener('change', e=>{ itens[idx].dataEntrega = e.target.value; refreshItemsArea(); });
       card.querySelector('.it-remove').addEventListener('click', ()=>{ itens.splice(idx,1); refreshItemsArea(); });
       card.querySelector('.it-add-extra').addEventListener('change', e=>{
         const extraId = e.target.value;
@@ -2936,7 +3142,8 @@ function openPedidoForm(id){
     const f = new FormData(e.target);
     const itensLimpos = itens.filter(it=>it.produtoId).map(it=>({
       produtoId:it.produtoId, qtd:Number(it.qtd)||1, preco:Number(it.preco)||0,
-      extras:(it.extras||[]).map(ex=>({itemExtraId:ex.itemExtraId, qtd:Number(ex.qtd)||1}))
+      extras:(it.extras||[]).map(ex=>({itemExtraId:ex.itemExtraId, qtd:Number(ex.qtd)||1})),
+      dataEntrega: it.dataEntrega||''
     }));
     const newStatus = f.get('status');
 
