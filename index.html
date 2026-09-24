@@ -1179,9 +1179,17 @@ const ICON_CHEVRON = `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor"
 /* =========================================================
    DASHBOARD
    ========================================================= */
+// Quantidade que efetivamente gera receita/custo: em Comodato, só o que já vendeu; nos demais, a quantidade do item
+function itemQtdFaturavel(formaPagamento, it){
+  if(formaPagamento === 'Comodato') return Math.min(Number(it.qtdVendida)||0, Number(it.qtd)||0);
+  return Number(it.qtd)||0;
+}
 function pedidoTotal(p){
   if(p.itens && p.itens.length){
-    return p.itens.reduce((s,it)=> s + (Number(it.preco)*Number(it.qtd)) + itemAcrescimoTotal(it), 0);
+    return p.itens.reduce((s,it)=>{
+      const qtd = itemQtdFaturavel(p.formaPagamento, it);
+      return s + (Number(it.preco)*qtd) + itemAcrescimoTotal(it, qtd);
+    }, 0);
   }
   return Number(p.valorManual)||0;
 }
@@ -1197,19 +1205,21 @@ function itemCustoUnitario(it){
   return custoProd + custoExtras;
 }
 // Soma dos itens extras marcados como "acréscimo" — some ao valor de venda do item
-function itemAcrescimoTotal(it){
+function itemAcrescimoTotal(it, qtdOverride){
+  const qtd = qtdOverride ?? Number(it.qtd||1);
   return (it.extras||[]).reduce((s,ex)=>{
     const item = itemExtraById(ex.itemExtraId);
     if(!item || (item.tipoValor||'debito')!=='acrescimo') return s;
-    return s + Number(item.custo||0)*Number(ex.qtd||1)*Number(it.qtd||1);
+    return s + Number(item.custo||0)*Number(ex.qtd||1)*qtd;
   },0);
 }
-function itemCustoTotal(it){
-  return itemCustoUnitario(it) * Number(it.qtd||1);
+function itemCustoTotal(it, qtdOverride){
+  return itemCustoUnitario(it) * Number(qtdOverride ?? it.qtd ?? 1);
 }
 // Custo total do pedido = soma do custo de cada item (produto + acessórios) já vendido
+// (em Comodato, só entra o custo das unidades já vendidas — o resto ainda está com o parceiro)
 function pedidoCustoItens(p){
-  return (p.itens||[]).reduce((s,it)=> s + itemCustoTotal(it), 0);
+  return (p.itens||[]).reduce((s,it)=> s + itemCustoTotal(it, itemQtdFaturavel(p.formaPagamento, it)), 0);
 }
 // Taxa cobrada pela operadora de cartão, debitada do lucro
 function pedidoTaxaCartao(p){
@@ -2815,9 +2825,14 @@ function renderPedidos(){
         <tbody>
           ${list.map(p=>{
             const atrasado = pedidoAtrasado(p);
+            const isComodato = p.formaPagamento==='Comodato';
             const itensResumo = (p.itens||[]).map(it=>{
               const nome = produtoById(it.produtoId)?.nome || '—';
               const qtd = Number(it.qtd)||1;
+              if(isComodato){
+                const vendida = Math.min(Number(it.qtdVendida)||0, qtd);
+                return `${nome} (${vendida}/${qtd} vendidos)`;
+              }
               return qtd>1 ? `${qtd}× ${nome}` : nome;
             }).join(', ') || '—';
             const cli = clienteById(p.clienteId);
@@ -2879,6 +2894,7 @@ function openPedidoForm(id){
     return;
   }
   let itens = editing?.itens?.length ? editing.itens.map(it=>({...it, extras:(it.extras||[]).map(ex=>({...ex}))})) : [];
+  let formaPagamentoAtual = editing?.formaPagamento || 'PIX';
 
   function itemRowHTML(it, idx){
     const prod = produtoById(it.produtoId);
@@ -2889,7 +2905,13 @@ function openPedidoForm(id){
         <button type="button" class="extra-remove" data-item-idx="${idx}" data-extra-idx="${exIdx}">${ICON_CLOSE}</button>
       </span>`;
     }).join('');
-    const custoItem = itemCustoTotal(it);
+    const isComodato = formaPagamentoAtual === 'Comodato';
+    const qtdTotal = Number(it.qtd)||0;
+    const qtdVendida = Math.min(Number(it.qtdVendida)||0, qtdTotal);
+    const restantes = Math.max(0, qtdTotal - qtdVendida);
+    const qtdFat = isComodato ? qtdVendida : qtdTotal;
+    const custoItem = itemCustoTotal(it, qtdFat);
+    const receitaItem = Number(it.preco||0)*qtdFat + itemAcrescimoTotal(it, qtdFat);
     return `<div class="item-row-card" data-idx="${idx}">
       <div class="item-row">
         <div style="display:flex; align-items:center; gap:8px;">
@@ -2915,7 +2937,14 @@ function openPedidoForm(id){
         <input class="it-data-entrega" type="date" value="${it.dataEntrega||''}" style="padding:5px 8px; max-width:165px;">
         <span class="hint" style="margin:0;">(opcional — deixe em branco para usar a entrega geral do pedido)</span>
       </div>
-      <div class="item-cost-preview">Custo deste item (produto + extras × qtd): <b>${fmtMoney(custoItem)}</b>${it.dataEntrega?` · Entrega: <b>${fmtDate(it.dataEntrega)}</b>`:''}</div>
+      ${isComodato ? `<div style="display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap; background:var(--accent-soft); padding:8px 10px; border-radius:8px;">
+        <label style="margin:0; font-weight:600; font-size:12.5px; color:var(--accent); white-space:nowrap;">🔄 Comodato — vendidos até agora:</label>
+        <input class="it-qtd-vendida" type="number" min="0" max="${qtdTotal}" step="1" value="${qtdVendida}" style="padding:5px 8px; max-width:90px;">
+        <span class="hint" style="margin:0;">de <span class="qtd-total-val">${qtdTotal}</span> entregues — restam <b class="qtd-restantes-val">${restantes}</b> em comodato</span>
+      </div>` : ''}
+      <div class="item-cost-preview">${isComodato
+        ? `Receita já gerada (${qtdVendida} vendido${qtdVendida===1?'':'s'}): <b>${fmtMoney(receitaItem)}</b> · Custo: <b>${fmtMoney(custoItem)}</b>`
+        : `Custo deste item (produto + extras × qtd): <b>${fmtMoney(custoItem)}</b>`}${it.dataEntrega?` · Entrega: <b>${fmtDate(it.dataEntrega)}</b>`:''}</div>
     </div>`;
   }
 
@@ -2925,7 +2954,7 @@ function openPedidoForm(id){
 
   function pedidoRascunho(f){
     return {
-      itens: itens.filter(it=>it.produtoId).map(it=>({produtoId:it.produtoId, qtd:Number(it.qtd)||1, preco:Number(it.preco)||0, extras:it.extras||[], dataEntrega:it.dataEntrega||''})),
+      itens: itens.filter(it=>it.produtoId).map(it=>({produtoId:it.produtoId, qtd:Number(it.qtd)||1, preco:Number(it.preco)||0, extras:it.extras||[], dataEntrega:it.dataEntrega||'', qtdVendida:Number(it.qtdVendida)||0})),
       valorManual: parseFloat(f.get('valorManual'))||0,
       formaPagamento: f.get('formaPagamento'),
       custoExtra: parseFloat(f.get('custoExtra'))||0,
@@ -2965,6 +2994,7 @@ function openPedidoForm(id){
             <input type="date" name="dataPagamento" value="${editing?.dataPagamento||todayISO()}" style="padding:6px 8px;">
           </div>
         </div>
+        <p class="hint" id="comodatoHint" style="display:${formaPagamentoAtual==='Comodato'?'block':'none'};">Em comodato você entrega as peças e só recebe conforme elas vendem — marque "Pago" quando receber o valor referente ao que já foi vendido, e atualize a quantidade vendida em cada item abaixo.</p>
       </div>
 
       <div class="field">
@@ -2987,6 +3017,7 @@ function openPedidoForm(id){
             <option value="Cartão de Crédito" ${editing?.formaPagamento==='Cartão de Crédito'?'selected':''}>Cartão de Crédito</option>
             <option value="Cartão de Débito" ${editing?.formaPagamento==='Cartão de Débito'?'selected':''}>Cartão de Débito</option>
             <option value="Dinheiro" ${editing?.formaPagamento==='Dinheiro'?'selected':''}>Dinheiro</option>
+            <option value="Comodato" ${editing?.formaPagamento==='Comodato'?'selected':''}>Comodato (consignação)</option>
           </select>
         </div>
         <div class="field"><label>Outras despesas extras (R$)</label><input name="custoExtra" type="number" step="0.01" min="0" value="${editing?.custoExtra??0}"></div>
@@ -3024,19 +3055,31 @@ function openPedidoForm(id){
   function updateTotals(){
     const f = new FormData(document.getElementById('formPedido'));
     const rascunho = pedidoRascunho(f);
-    const venda = rascunho.itens.length ? rascunho.itens.reduce((s,it)=>s+it.preco*it.qtd+itemAcrescimoTotal(it),0) : rascunho.valorManual;
-    const custoItens = rascunho.itens.reduce((s,it)=> s + itemCustoTotal(it), 0);
+    const venda = rascunho.itens.length ? rascunho.itens.reduce((s,it)=>{
+      const q = itemQtdFaturavel(rascunho.formaPagamento, it);
+      return s + it.preco*q + itemAcrescimoTotal(it, q);
+    },0) : rascunho.valorManual;
+    const custoItens = rascunho.itens.reduce((s,it)=> s + itemCustoTotal(it, itemQtdFaturavel(rascunho.formaPagamento, it)), 0);
     const isCartao = rascunho.formaPagamento==='Cartão de Crédito' || rascunho.formaPagamento==='Cartão de Débito';
     const taxaCartao = isCartao ? venda * (rascunho.taxaCartaoPercent/100) : 0;
     const lucroLiquido = venda - custoItens - taxaCartao - rascunho.custoExtra;
 
     document.getElementById('totalsBox').innerHTML = `
-      <div class="row"><span>Valor Bruto (venda)</span><b>${fmtMoney(venda)}</b></div>
+      ${rascunho.formaPagamento==='Comodato' ? `<div class="row"><span>Valor Bruto (apenas unidades já vendidas)</span><b>${fmtMoney(venda)}</b></div>` : `<div class="row"><span>Valor Bruto (venda)</span><b>${fmtMoney(venda)}</b></div>`}
       <div class="row"><span>Custo dos itens (produto + extras)</span><b>-${fmtMoney(custoItens)}</b></div>
       ${isCartao ? `<div class="row"><span>Taxa do cartão (${rascunho.taxaCartaoPercent||0}%)</span><b>-${fmtMoney(taxaCartao)}</b></div>` : ''}
       ${rascunho.custoExtra ? `<div class="row"><span>Outras despesas extras</span><b>-${fmtMoney(rascunho.custoExtra)}</b></div>` : ''}
       <div class="row final"><span>Lucro líquido</span><b>${fmtMoney(lucroLiquido)}</b></div>
     `;
+  }
+
+  function refreshComodatoPreview(card, idx){
+    const total = Number(itens[idx].qtd)||0;
+    const vendida = Math.min(Number(itens[idx].qtdVendida)||0, total);
+    const totalEl = card.querySelector('.qtd-total-val');
+    const restEl = card.querySelector('.qtd-restantes-val');
+    if(totalEl) totalEl.textContent = total;
+    if(restEl) restEl.textContent = Math.max(0, total-vendida);
   }
 
   function bindItemEvents(){
@@ -3048,9 +3091,10 @@ function openPedidoForm(id){
         if(prod){ itens[idx].preco = prod.preco; }
         refreshItemsArea();
       });
-      card.querySelector('.it-qtd').addEventListener('input', e=>{ itens[idx].qtd = e.target.value; updateTotals(); });
+      card.querySelector('.it-qtd').addEventListener('input', e=>{ itens[idx].qtd = e.target.value; refreshComodatoPreview(card, idx); updateTotals(); });
       card.querySelector('.it-preco').addEventListener('input', e=>{ itens[idx].preco = e.target.value; updateTotals(); });
       card.querySelector('.it-data-entrega').addEventListener('change', e=>{ itens[idx].dataEntrega = e.target.value; refreshItemsArea(); });
+      card.querySelector('.it-qtd-vendida')?.addEventListener('input', e=>{ itens[idx].qtdVendida = e.target.value; refreshComodatoPreview(card, idx); updateTotals(); });
       card.querySelector('.it-remove').addEventListener('click', ()=>{ itens.splice(idx,1); refreshItemsArea(); });
       card.querySelector('.it-add-extra').addEventListener('change', e=>{
         const extraId = e.target.value;
@@ -3077,10 +3121,16 @@ function openPedidoForm(id){
     updateTotals();
   }
   document.getElementById('addItem')?.addEventListener('click', ()=>{
-    itens.push({produtoId:'', qtd:1, preco: DB.produtos[0]?.preco || 0, extras:[]});
+    itens.push({produtoId:'', qtd:1, preco: DB.produtos[0]?.preco || 0, extras:[], qtdVendida:0});
     refreshItemsArea();
   });
-  document.getElementById('formaPagamentoSelect').addEventListener('change', ()=>{ toggleCartaoFields(); updateTotals(); });
+  document.getElementById('formaPagamentoSelect').addEventListener('change', ()=>{
+    formaPagamentoAtual = document.getElementById('formaPagamentoSelect').value;
+    toggleCartaoFields();
+    const hint = document.getElementById('comodatoHint');
+    if(hint) hint.style.display = formaPagamentoAtual==='Comodato' ? 'block' : 'none';
+    refreshItemsArea();
+  });
   document.querySelectorAll('input[name="pago"]').forEach(r=> r.addEventListener('change', ()=>{
     document.getElementById('campoDataPagamento').style.display = document.getElementById('radioPago').checked ? 'flex' : 'none';
   }));
@@ -3098,7 +3148,8 @@ function openPedidoForm(id){
     const itensLimpos = itens.filter(it=>it.produtoId).map(it=>({
       produtoId:it.produtoId, qtd:Number(it.qtd)||1, preco:Number(it.preco)||0,
       extras:(it.extras||[]).map(ex=>({itemExtraId:ex.itemExtraId, qtd:Number(ex.qtd)||1})),
-      dataEntrega: it.dataEntrega||''
+      dataEntrega: it.dataEntrega||'',
+      qtdVendida: Number(it.qtdVendida)||0
     }));
     const newStatus = f.get('status');
 
