@@ -161,6 +161,10 @@
   .kpi.danger .value{color:var(--danger);}
   .kpi.success{border-color:rgba(107,203,119,.35);}
   .kpi.success .value{color:var(--success);}
+  .kpi.clickable{cursor:pointer; transition:transform .12s ease, border-color .12s ease;}
+  .kpi.clickable:hover{border-color:var(--accent); transform:translateY(-1px);}
+  .kpi.clickable .label{display:flex; align-items:center; justify-content:space-between; gap:6px;}
+  .kpi.clickable .label .arrow{color:var(--text-muted);}
 
   .panel{
     background:var(--surface); border:1px solid var(--border); border-radius:var(--radius);
@@ -214,6 +218,7 @@
   .b-pronto{background:var(--success-soft); color:var(--success);}
   .b-entregue{background:var(--success-dark-soft); color:var(--success-dark);}
   .b-cancelado{background:var(--danger-soft); color:var(--danger);}
+  .b-atrasado{background:var(--danger-soft); color:var(--danger);}
 
   .stock-low{color:var(--danger); font-weight:600;}
 
@@ -1220,6 +1225,10 @@ function pedidoValorBruto(p){
 function pedidoLucroLiquido(p){
   return pedidoTotal(p) - pedidoCustoItens(p) - pedidoTaxaCartao(p) - (Number(p.custoExtra)||0);
 }
+// Um pedido está atrasado quando já passou da data de entrega prevista e ainda não foi entregue/cancelado
+function pedidoAtrasado(p){
+  return !!(p.dataEntrega && !['entregue','cancelado'].includes(p.status) && daysUntil(p.dataEntrega) < 0);
+}
 
 function fmtMesLabel(iso){
   const [y,m] = iso.split('-');
@@ -1233,18 +1242,7 @@ function renderDashboard(){
   const mesAtual = new Date().toISOString().slice(0,7);
   if(!dashboardMes) dashboardMes = mesAtual;
 
-  const atrasados = DB.pedidos.filter(p=>{
-    if(!p.dataEntrega || ['entregue','cancelado'].includes(p.status)) return false;
-    return daysUntil(p.dataEntrega) < 0;
-  });
-
-  const limiteEstoque = DB.config.limiteBaixoProdutos ?? 5;
-  const estoqueBaixo = DB.produtos.filter(p => estoqueQtd(p.id) <= limiteEstoque);
-  const limiteItensAd = DB.config.limiteBaixoItensAdicionais ?? 5;
-  const itensBaixo = DB.itensExtras.filter(ex => estoqueExtraQtd(ex.id) <= limiteItensAd);
-  const limiteFilamentos = DB.config.limiteBaixoFilamentos ?? 200;
-  const filamentosBaixo = DB.filamentoEstoque.filter(r => filamentoPesoLiquido(r) <= limiteFilamentos);
-  const totalBaixoGeral = estoqueBaixo.length + itensBaixo.length + filamentosBaixo.length;
+  const atrasados = DB.pedidos.filter(pedidoAtrasado);
 
   // Totais gerais: só contam pedidos já ENTREGUES (confirmados)
   const pedidosEntreguesTodos = DB.pedidos.filter(p => p.status === 'entregue' && p.pago);
@@ -1281,15 +1279,10 @@ function renderDashboard(){
     </div>
 
     <div class="grid-cards">
-      <div class="kpi ${atrasados.length? 'danger':''}">
-        <div class="label">Pedidos atrasados</div>
+      <div class="kpi ${atrasados.length? 'danger':''} clickable" id="kpiPedidosAtrasados" title="Ver lista de pedidos atrasados">
+        <div class="label">Pedidos atrasados <span class="arrow" style="display:inline-flex; transform:rotate(-90deg);">${ICON_CHEVRON}</span></div>
         <div class="value">${atrasados.length}</div>
-        <div class="sub">passaram da data de entrega</div>
-      </div>
-      <div class="kpi ${totalBaixoGeral? 'danger':''}">
-        <div class="label">Itens com estoque baixo</div>
-        <div class="value">${totalBaixoGeral}</div>
-        <div class="sub">produtos, itens adicionais e filamentos</div>
+        <div class="sub">passaram da data de entrega — clique para ver a lista</div>
       </div>
     </div>
 
@@ -1340,63 +1333,14 @@ function renderDashboard(){
       <h2>Pedidos recentes <span class="count">${DB.pedidos.length} no total</span></h2>
       ${recentes.length ? tablePedidosMini(recentes) : emptyState('Nenhum pedido cadastrado ainda.', 'btnNovoPedidoEmpty')}
     </div>
-
-    ${estoqueBaixo.length ? `
-    <div class="panel">
-      <h2>Produtos com Estoque Baixo <span class="count">${estoqueBaixo.length} item(ns)</span></h2>
-      <div class="table-wrap"><table>
-        <thead><tr><th></th><th>Produto</th><th>Categoria</th><th class="num">Qtd. atual</th><th class="num">Limite definido</th></tr></thead>
-        <tbody>
-          ${estoqueBaixo.map(p=>`
-            <tr>
-              <td style="width:40px;">${produtoThumbHTML(p, 30)}</td>
-              <td>${esc(p.nome)}</td>
-              <td>${esc(p.categoria)||'—'}</td>
-              <td class="num stock-low">${estoqueQtd(p.id)} un.</td>
-              <td class="num">${limiteEstoque} un.</td>
-            </tr>`).join('')}
-        </tbody>
-      </table></div>
-    </div>` : ''}
-
-    ${itensBaixo.length ? `
-    <div class="panel">
-      <h2>Itens Adicionais com Estoque Baixo <span class="count">${itensBaixo.length} item(ns)</span></h2>
-      <div class="table-wrap"><table>
-        <thead><tr><th></th><th>Item</th><th class="num">Qtd. atual</th><th class="num">Limite definido</th></tr></thead>
-        <tbody>
-          ${itensBaixo.map(ex=>`
-            <tr>
-              <td style="width:40px;">${produtoThumbHTML(ex, 30)}</td>
-              <td>${esc(ex.nome)}</td>
-              <td class="num stock-low">${estoqueExtraQtd(ex.id)} un.</td>
-              <td class="num">${limiteItensAd} un.</td>
-            </tr>`).join('')}
-        </tbody>
-      </table></div>
-    </div>` : ''}
-
-    ${filamentosBaixo.length ? `
-    <div class="panel">
-      <h2>Filamentos com Estoque Baixo <span class="count">${filamentosBaixo.length} item(ns)</span></h2>
-      <div class="table-wrap"><table>
-        <thead><tr><th></th><th>Marca</th><th>Material</th><th class="num">Peso líquido</th><th class="num">Limite definido</th></tr></thead>
-        <tbody>
-          ${filamentosBaixo.map(r=>`
-            <tr>
-              <td style="width:24px;"><span style="display:inline-block;width:14px;height:14px;border-radius:50%;background:${r.corHex||'#666'};border:1px solid var(--border);"></span></td>
-              <td>${esc(r.marca)}</td>
-              <td>${esc(r.material)}</td>
-              <td class="num stock-low">${filamentoPesoLiquido(r).toFixed(0)} g</td>
-              <td class="num">${limiteFilamentos} g</td>
-            </tr>`).join('')}
-        </tbody>
-      </table></div>
-    </div>` : ''}
   `;
 
   document.getElementById('btnNovoPedidoTop')?.addEventListener('click', ()=> openPedidoForm());
   document.getElementById('btnNovoPedidoEmpty')?.addEventListener('click', ()=> openPedidoForm());
+  document.getElementById('kpiPedidosAtrasados')?.addEventListener('click', ()=>{
+    pedidoFiltroStatus = new Set(['atrasado']);
+    goTo('pedidos');
+  });
   document.getElementById('selectMesDashboard')?.addEventListener('change', e=>{
     dashboardMes = e.target.value;
     renderDashboard();
@@ -2833,7 +2777,7 @@ let pedidoOrdem = 'dataEntrega-asc';
 
 function renderPedidos(){
   let list = [...DB.pedidos];
-  if(pedidoFiltroStatus.size>0) list = list.filter(p=>pedidoFiltroStatus.has(p.status));
+  if(pedidoFiltroStatus.size>0) list = list.filter(p=> pedidoFiltroStatus.has(p.status) || (pedidoFiltroStatus.has('atrasado') && pedidoAtrasado(p)));
   if(pedidoBusca) list = list.filter(p=> clienteNome(p.clienteId).toLowerCase().includes(pedidoBusca.toLowerCase()));
   const [campoOrd, dirOrd] = pedidoOrdem.split('-');
   if(campoOrd==='cliente') list = ordenarLista(list.map(p=>({...p, __cliente:clienteNome(p.clienteId)})), '__cliente', dirOrd);
@@ -2853,6 +2797,7 @@ function renderPedidos(){
             const ativo = pedidoFiltroStatus.size===0 || pedidoFiltroStatus.has(s.id);
             return `<button type="button" class="badge ${s.cls} chip-toggle ${ativo?'chip-active':'chip-inactive'}" data-status-chip="${s.id}" title="Mostrar/ocultar ${s.label}">${s.label}</button>`;
           }).join('')}
+          ${(()=>{ const ativo = pedidoFiltroStatus.size===0 || pedidoFiltroStatus.has('atrasado'); return `<button type="button" class="badge b-atrasado chip-toggle ${ativo?'chip-active':'chip-inactive'}" data-status-chip="atrasado" title="Mostrar/ocultar pedidos em atraso">⚠ Atrasado</button>`; })()}
           ${pedidoFiltroStatus.size>0 ? `<button type="button" class="chip-clear" id="btnLimparStatus">Limpar filtro ✕</button>` : ''}
         </div>
         <select id="selectOrdemPedido" style="max-width:220px; margin-left:auto;">
@@ -2869,8 +2814,12 @@ function renderPedidos(){
         <thead><tr><th>Cliente</th><th>Itens</th><th>Entrega</th><th>Pagamento</th><th>Status</th><th>Pago?</th><th class="num">Total</th><th></th></tr></thead>
         <tbody>
           ${list.map(p=>{
-            const atrasado = p.dataEntrega && !['entregue','cancelado'].includes(p.status) && daysUntil(p.dataEntrega)<0;
-            const itensResumo = (p.itens||[]).map(it=> produtoById(it.produtoId)?.nome || '—').join(', ') || '—';
+            const atrasado = pedidoAtrasado(p);
+            const itensResumo = (p.itens||[]).map(it=>{
+              const nome = produtoById(it.produtoId)?.nome || '—';
+              const qtd = Number(it.qtd)||1;
+              return qtd>1 ? `${qtd}× ${nome}` : nome;
+            }).join(', ') || '—';
             const cli = clienteById(p.clienteId);
             const wLink = whatsappLink(cli?.telefone);
             return `<tr data-dbl="${p.id}">
@@ -3020,6 +2969,12 @@ function openPedidoForm(id){
 
       <div class="field">
         <label>Itens do pedido</label>
+        <div class="item-row" style="margin-bottom:6px;">
+          <span class="hint" style="margin:0; font-weight:700; text-transform:uppercase; font-size:10.5px; letter-spacing:.03em;">Produto</span>
+          <span class="hint" style="margin:0; font-weight:700; text-transform:uppercase; font-size:10.5px; letter-spacing:.03em; text-align:center;">Qtd.</span>
+          <span class="hint" style="margin:0; font-weight:700; text-transform:uppercase; font-size:10.5px; letter-spacing:.03em; text-align:center;">Preço un. (R$)</span>
+          <span></span>
+        </div>
         <div id="itemsArea">${itemsAreaHTML()}</div>
         <button type="button" class="btn ghost sm" id="addItem" style="margin-top:6px;">${ICON_PLUS}Adicionar item</button>
       </div>
