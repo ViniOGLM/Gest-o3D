@@ -2487,6 +2487,7 @@ function renderFilamentos(){
           ${listaEstoque.map(r=>{
             const tara = filamentoTaraMediaMarca(r.marca);
             const liquido = filamentoPesoLiquido(r);
+            const baixo = liquido <= limiteFilamentos;
             return `<tr style="cursor:pointer;" data-row-rolo="${r.id}">
               <td><b>${esc(r.marca)}</b></td>
               <td>${esc(r.material)}</td>
@@ -2494,7 +2495,7 @@ function renderFilamentos(){
               <td class="num mono">${r.preco? fmtMoney(r.preco) : '—'}</td>
               <td class="num mono">${Number(r.pesoBruto||0).toFixed(0)} g</td>
               <td class="num mono">${tara.toFixed(1)} g</td>
-              <td class="num mono" style="font-weight:600; color:var(--accent);">${liquido.toFixed(0)} g</td>
+              <td class="num mono ${baixo?'stock-low':''}" style="${baixo?'':'font-weight:600; color:var(--accent);'}">${liquido.toFixed(0)} g${baixo?' ⚠':''}</td>
               <td><div class="row-actions">
                 <button class="icon-btn" data-del-rolo="${r.id}">${ICON_TRASH}</button>
               </div></td>
