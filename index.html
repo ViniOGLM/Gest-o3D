@@ -995,7 +995,7 @@ function filamentoCoresLista(rolo){
 }
 function filamentoCoresChipsHTML(rolo){
   return filamentoCoresLista(rolo).map(c=>
-    `<span class="color-chip"><span class="swatch" style="background:${c.hex||'#3fc1b0'};"></span>${c.nome? esc(c.nome) : ''}</span>`
+    `<span class="color-chip"><span class="swatch" style="background:${c.hex||'#3fc1b0'};"></span>${c.nome? esc(c.nome) : (c.hex||'').toUpperCase()}</span>`
   ).join(' ');
 }
 
@@ -1355,13 +1355,14 @@ function renderDashboard(){
     <div class="panel">
       <h2>Filamentos com Estoque Baixo <span class="count">${filamentosBaixo.length} item(ns)</span></h2>
       <div class="table-wrap"><table>
-        <thead><tr><th>Marca</th><th>Material</th><th class="num">Peso líquido</th><th class="num">Limite definido</th></tr></thead>
+        <thead><tr><th>Marca</th><th>Material</th><th>Cor(es)</th><th class="num">Peso líquido</th><th class="num">Limite definido</th></tr></thead>
         <tbody>
           ${filamentosBaixo.map(r=>`
             <tr>
               <td><b>${esc(r.marca)}</b></td>
               <td>${esc(r.material)}</td>
-              <td class="num stock-low">${filamentoPesoLiquido(r).toFixed(0)} g</td>
+              <td>${filamentoCoresChipsHTML(r)}</td>
+              <td class="num mono" style="font-weight:700; color:var(--danger);">${filamentoPesoLiquido(r).toFixed(0)} g</td>
               <td class="num">${limiteFilamentos} g</td>
             </tr>`).join('')}
         </tbody>
@@ -2495,7 +2496,7 @@ function renderFilamentos(){
               <td class="num mono">${r.preco? fmtMoney(r.preco) : '—'}</td>
               <td class="num mono">${Number(r.pesoBruto||0).toFixed(0)} g</td>
               <td class="num mono">${tara.toFixed(1)} g</td>
-              <td class="num mono ${baixo?'stock-low':''}" style="${baixo?'':'font-weight:600; color:var(--accent);'}">${liquido.toFixed(0)} g${baixo?' ⚠':''}</td>
+              <td class="num mono" style="${baixo?'font-weight:700; color:var(--danger);':'font-weight:600; color:var(--accent);'}">${liquido.toFixed(0)} g${baixo?' ⚠':''}</td>
               <td><div class="row-actions">
                 <button class="icon-btn" data-del-rolo="${r.id}">${ICON_TRASH}</button>
               </div></td>
