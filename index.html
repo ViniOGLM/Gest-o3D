@@ -1253,6 +1253,8 @@ function renderDashboard(){
   if(!dashboardMes) dashboardMes = mesAtual;
 
   const atrasados = DB.pedidos.filter(pedidoAtrasado);
+  const limiteFilamentos = DB.config.limiteBaixoFilamentos ?? 200;
+  const filamentosBaixo = DB.filamentoEstoque.filter(r => filamentoPesoLiquido(r) <= limiteFilamentos);
 
   // Totais gerais: só contam pedidos já ENTREGUES (confirmados)
   const pedidosEntreguesTodos = DB.pedidos.filter(p => p.status === 'entregue' && p.pago);
@@ -1293,6 +1295,11 @@ function renderDashboard(){
         <div class="label">Pedidos atrasados <span class="arrow" style="display:inline-flex; transform:rotate(-90deg);">${ICON_CHEVRON}</span></div>
         <div class="value">${atrasados.length}</div>
         <div class="sub">passaram da data de entrega — clique para ver a lista</div>
+      </div>
+      <div class="kpi ${filamentosBaixo.length? 'danger':''} clickable" id="kpiFilamentosBaixo" title="Ver estoque de filamentos">
+        <div class="label">Filamentos com estoque baixo <span class="arrow" style="display:inline-flex; transform:rotate(-90deg);">${ICON_CHEVRON}</span></div>
+        <div class="value">${filamentosBaixo.length}</div>
+        <div class="sub">peso líquido abaixo do limite definido — clique para ver</div>
       </div>
     </div>
 
@@ -1343,6 +1350,23 @@ function renderDashboard(){
       <h2>Pedidos recentes <span class="count">${DB.pedidos.length} no total</span></h2>
       ${recentes.length ? tablePedidosMini(recentes) : emptyState('Nenhum pedido cadastrado ainda.', 'btnNovoPedidoEmpty')}
     </div>
+
+    ${filamentosBaixo.length ? `
+    <div class="panel">
+      <h2>Filamentos com Estoque Baixo <span class="count">${filamentosBaixo.length} item(ns)</span></h2>
+      <div class="table-wrap"><table>
+        <thead><tr><th>Marca</th><th>Material</th><th class="num">Peso líquido</th><th class="num">Limite definido</th></tr></thead>
+        <tbody>
+          ${filamentosBaixo.map(r=>`
+            <tr>
+              <td><b>${esc(r.marca)}</b></td>
+              <td>${esc(r.material)}</td>
+              <td class="num stock-low">${filamentoPesoLiquido(r).toFixed(0)} g</td>
+              <td class="num">${limiteFilamentos} g</td>
+            </tr>`).join('')}
+        </tbody>
+      </table></div>
+    </div>` : ''}
   `;
 
   document.getElementById('btnNovoPedidoTop')?.addEventListener('click', ()=> openPedidoForm());
@@ -1351,6 +1375,7 @@ function renderDashboard(){
     pedidoFiltroStatus = new Set(['atrasado']);
     goTo('pedidos');
   });
+  document.getElementById('kpiFilamentosBaixo')?.addEventListener('click', ()=> goTo('filamentos'));
   document.getElementById('selectMesDashboard')?.addEventListener('change', e=>{
     dashboardMes = e.target.value;
     renderDashboard();
@@ -2932,11 +2957,6 @@ function openPedidoForm(id){
           ${DB.itensExtras.map(ex=>`<option value="${ex.id}">${esc(ex.nome)} — ${fmtMoney(ex.custo)}</option>`).join('')}
         </select>
       </div>
-      <div style="display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap;">
-        <label style="margin:0; font-weight:400; font-size:12.5px; color:var(--text-muted); white-space:nowrap;">Data de entrega deste produto:</label>
-        <input class="it-data-entrega" type="date" value="${it.dataEntrega||''}" style="padding:5px 8px; max-width:165px;">
-        <span class="hint" style="margin:0;">(opcional — deixe em branco para usar a entrega geral do pedido)</span>
-      </div>
       ${isComodato ? `<div style="display:flex; align-items:center; gap:8px; margin-top:6px; flex-wrap:wrap; background:var(--accent-soft); padding:8px 10px; border-radius:8px;">
         <label style="margin:0; font-weight:600; font-size:12.5px; color:var(--accent); white-space:nowrap;">🔄 Comodato — vendidos até agora:</label>
         <input class="it-qtd-vendida" type="number" min="0" max="${qtdTotal}" step="1" value="${qtdVendida}" style="padding:5px 8px; max-width:90px;">
@@ -2944,7 +2964,7 @@ function openPedidoForm(id){
       </div>` : ''}
       <div class="item-cost-preview">${isComodato
         ? `Receita já gerada (${qtdVendida} vendido${qtdVendida===1?'':'s'}): <b>${fmtMoney(receitaItem)}</b> · Custo: <b>${fmtMoney(custoItem)}</b>`
-        : `Custo deste item (produto + extras × qtd): <b>${fmtMoney(custoItem)}</b>`}${it.dataEntrega?` · Entrega: <b>${fmtDate(it.dataEntrega)}</b>`:''}</div>
+        : `Custo deste item (produto + extras × qtd): <b>${fmtMoney(custoItem)}</b>`}</div>
     </div>`;
   }
 
@@ -2954,7 +2974,7 @@ function openPedidoForm(id){
 
   function pedidoRascunho(f){
     return {
-      itens: itens.filter(it=>it.produtoId).map(it=>({produtoId:it.produtoId, qtd:Number(it.qtd)||1, preco:Number(it.preco)||0, extras:it.extras||[], dataEntrega:it.dataEntrega||'', qtdVendida:Number(it.qtdVendida)||0})),
+      itens: itens.filter(it=>it.produtoId).map(it=>({produtoId:it.produtoId, qtd:Number(it.qtd)||1, preco:Number(it.preco)||0, extras:it.extras||[], qtdVendida:Number(it.qtdVendida)||0})),
       valorManual: parseFloat(f.get('valorManual'))||0,
       formaPagamento: f.get('formaPagamento'),
       custoExtra: parseFloat(f.get('custoExtra'))||0,
@@ -3093,7 +3113,6 @@ function openPedidoForm(id){
       });
       card.querySelector('.it-qtd').addEventListener('input', e=>{ itens[idx].qtd = e.target.value; refreshComodatoPreview(card, idx); updateTotals(); });
       card.querySelector('.it-preco').addEventListener('input', e=>{ itens[idx].preco = e.target.value; updateTotals(); });
-      card.querySelector('.it-data-entrega').addEventListener('change', e=>{ itens[idx].dataEntrega = e.target.value; refreshItemsArea(); });
       card.querySelector('.it-qtd-vendida')?.addEventListener('input', e=>{ itens[idx].qtdVendida = e.target.value; refreshComodatoPreview(card, idx); updateTotals(); });
       card.querySelector('.it-remove').addEventListener('click', ()=>{ itens.splice(idx,1); refreshItemsArea(); });
       card.querySelector('.it-add-extra').addEventListener('change', e=>{
@@ -3148,7 +3167,6 @@ function openPedidoForm(id){
     const itensLimpos = itens.filter(it=>it.produtoId).map(it=>({
       produtoId:it.produtoId, qtd:Number(it.qtd)||1, preco:Number(it.preco)||0,
       extras:(it.extras||[]).map(ex=>({itemExtraId:ex.itemExtraId, qtd:Number(ex.qtd)||1})),
-      dataEntrega: it.dataEntrega||'',
       qtdVendida: Number(it.qtdVendida)||0
     }));
     const newStatus = f.get('status');
