@@ -1287,9 +1287,11 @@ function fmtMesLabel(iso){
 
 let dashboardMes = null;
 let dashboardAno = null;
-let vendasMetrica = 'valor';
+let vendasMetrica = 'valor';      // 'qtd' | 'valor'
+let vendasTipoValor = 'bruto';    // 'bruto' | 'liquido' (vale quando a métrica é valor)
 
 function renderDashboard(){
+  const vendasChave = vendasMetrica==='qtd' ? 'qtd' : (vendasTipoValor==='liquido' ? 'liquido' : 'valor');
   const mesAtual = new Date().toISOString().slice(0,7);
   if(!dashboardMes) dashboardMes = mesAtual;
   const anoAtual = mesAtual.slice(0,4);
@@ -1394,22 +1396,28 @@ function renderDashboard(){
 
     <div style="display:flex; align-items:center; gap:12px; margin:22px 0 12px 0; flex-wrap:wrap;">
       <h2 style="font-size:16px; margin:0;">Vendas por Produto</h2>
-      <div class="seg-toggle" style="margin-left:auto;">
-        <button type="button" class="${vendasMetrica==='qtd'?'active':''}" data-metrica-vendas="qtd">Quantidades vendidas</button>
-        <button type="button" class="${vendasMetrica==='valor'?'active':''}" data-metrica-vendas="valor">Valores acumulados (R$)</button>
+      <div style="margin-left:auto; display:flex; gap:10px; flex-wrap:wrap;">
+        <div class="seg-toggle">
+          <button type="button" class="${vendasMetrica==='qtd'?'active':''}" data-metrica-vendas="qtd">Quantidades vendidas</button>
+          <button type="button" class="${vendasMetrica==='valor'?'active':''}" data-metrica-vendas="valor">Valores acumulados (R$)</button>
+        </div>
+        ${vendasMetrica==='valor' ? `<div class="seg-toggle">
+          <button type="button" class="${vendasTipoValor==='bruto'?'active':''}" data-tipo-vendas="bruto">Valor bruto</button>
+          <button type="button" class="${vendasTipoValor==='liquido'?'active':''}" data-tipo-vendas="liquido">Valor líquido</button>
+        </div>` : ''}
       </div>
     </div>
     <div class="grid-cards" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));">
       <div class="panel" style="margin-bottom:0;">
         <h2>Mensal — ${fmtMesLabel(dashboardMes)} <span class="count">pedidos entregues</span></h2>
-        ${vendasChartHTML(dashboardMes, vendasMetrica)}
+        ${vendasChartHTML(dashboardMes, vendasChave)}
         <p class="hint">O mês é o selecionado em "Métricas Financeiras do Mês".</p>
       </div>
       <div class="panel" style="margin-bottom:0;">
         <h2>Anual — <select id="selectAnoDashboard" style="width:auto; padding:4px 8px; display:inline-block;">
           ${anosVendas.map(a=>`<option value="${a}" ${a===dashboardAno?'selected':''}>${a}</option>`).join('')}
         </select> <span class="count">pedidos entregues</span></h2>
-        ${vendasChartHTML(dashboardAno, vendasMetrica)}
+        ${vendasChartHTML(dashboardAno, vendasChave)}
       </div>
     </div>
 
@@ -1456,6 +1464,10 @@ function renderDashboard(){
     vendasMetrica = b.dataset.metricaVendas;
     renderDashboard();
   }));
+  pageEl.querySelectorAll('[data-tipo-vendas]').forEach(b=> b.addEventListener('click', ()=>{
+    vendasTipoValor = b.dataset.tipoVendas;
+    renderDashboard();
+  }));
 }
 
 // Vendas por produto: considera pedidos ENTREGUES (mês/ano pela data de entrega, como no restante do painel).
@@ -1470,27 +1482,33 @@ function vendasPorProduto(prefixoData){
       if(!q) return;
       const prod = produtoById(it.produtoId);
       const chave = it.produtoId || '—';
-      if(!mapa[chave]) mapa[chave] = {nome: prod?.nome || 'Produto removido', foto: prod?.foto || '', qtd:0, valor:0};
+      if(!mapa[chave]) mapa[chave] = {nome: prod?.nome || 'Produto removido', foto: prod?.foto || '', qtd:0, valor:0, liquido:0};
+      const receita = Number(it.preco||0)*q + itemAcrescimoTotal(it, q);
+      // Líquido do item = receita − custo (produto + extras) − parte proporcional da taxa de cartão e das despesas extras do pedido
+      const totalPed = pedidoTotal(p);
+      const share = totalPed ? receita/totalPed : 0;
       mapa[chave].qtd += q;
-      mapa[chave].valor += Number(it.preco||0)*q + itemAcrescimoTotal(it, q);
+      mapa[chave].valor += receita;
+      mapa[chave].liquido += receita - itemCustoTotal(it, q) - (pedidoTaxaCartao(p) + (Number(p.custoExtra)||0))*share;
     });
   });
   return Object.values(mapa);
 }
-function vendasChartHTML(prefixoData, metrica){
-  const lista = vendasPorProduto(prefixoData).sort((a,b)=> b[metrica]-a[metrica]);
+// chave: 'qtd' (quantidades), 'valor' (valor bruto) ou 'liquido' (lucro líquido)
+function vendasChartHTML(prefixoData, chave){
+  const lista = vendasPorProduto(prefixoData).sort((a,b)=> b[chave]-a[chave]);
   if(!lista.length) return '<p class="hint" style="padding:10px 0;">Nenhuma venda entregue neste período.</p>';
-  const max = Math.max(...lista.map(x=>x[metrica])) || 1;
-  const totalValor = lista.reduce((s,x)=>s+x.valor,0), totalQtd = lista.reduce((s,x)=>s+x.qtd,0);
-  const fmt = x => metrica==='valor' ? fmtMoney(x.valor) : `${x.qtd} un.`;
+  const max = Math.max(...lista.map(x=>x[chave]), 0) || 1;
+  const totalValor = lista.reduce((s,x)=>s+x.valor,0), totalLiq = lista.reduce((s,x)=>s+x.liquido,0), totalQtd = lista.reduce((s,x)=>s+x.qtd,0);
+  const fmt = x => chave==='qtd' ? `${x.qtd} un.` : fmtMoney(x[chave]);
   return `<div class="vendas-chart">
     ${lista.map(x=>`
-      <div class="vendas-row" title="${esc(x.nome)} — ${x.qtd} un. — ${fmtMoney(x.valor)}">
+      <div class="vendas-row" title="${esc(x.nome)} — ${x.qtd} un. — bruto ${fmtMoney(x.valor)} — líquido ${fmtMoney(x.liquido)}">
         <div class="vendas-nome">${esc(x.nome)}</div>
-        <div class="vendas-track"><div class="vendas-bar" style="width:${Math.max(2, x[metrica]/max*100)}%;"></div></div>
-        <div class="vendas-valor">${fmt(x)}</div>
+        <div class="vendas-track"><div class="vendas-bar" style="width:${Math.max(2, Math.max(0,x[chave])/max*100)}%;"></div></div>
+        <div class="vendas-valor" style="${x[chave]<0?'color:var(--danger);':''}">${fmt(x)}</div>
       </div>`).join('')}
-    <div class="vendas-total">Total: <b>${fmtMoney(totalValor)}</b> · <b>${totalQtd}</b> un.</div>
+    <div class="vendas-total">Bruto: <b>${fmtMoney(totalValor)}</b> · Líquido: <b>${fmtMoney(totalLiq)}</b> · <b>${totalQtd}</b> un.</div>
   </div>`;
 }
 
