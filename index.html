@@ -238,6 +238,27 @@
   }
   .chip-clear:hover{color:var(--text);}
 
+  /* ---------- filtro em lista (multisseleção) ---------- */
+  .filter-dropdown{position:relative;}
+  .filter-menu{
+    display:none; position:absolute; top:calc(100% + 6px); left:0; z-index:30;
+    min-width:240px; max-height:70vh; overflow-y:auto;
+    background:var(--surface); border:1px solid var(--border); border-radius:10px;
+    padding:8px 10px 10px 10px; box-shadow:0 12px 32px rgba(0,0,0,.4);
+  }
+  .filter-menu.open{display:block;}
+  .filter-group-title{
+    font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:.04em;
+    color:var(--text-muted); margin:10px 0 4px 0; padding-top:8px; border-top:1px solid var(--border);
+  }
+  .filter-group-title:first-child{margin-top:2px; padding-top:0; border-top:none;}
+  .filter-option{
+    display:flex; align-items:center; gap:10px; margin:0; padding:5px 6px; border-radius:6px;
+    font-size:13px; color:var(--text); font-weight:400; cursor:pointer;
+  }
+  .filter-option:hover{background:var(--surface-2);}
+  .filter-option input{width:15px; height:15px; flex-shrink:0; margin:0; cursor:pointer; accent-color:var(--accent);}
+
   /* ---------- clickable rows (duplo clique abre o item) ---------- */
   tbody tr[data-dbl]{cursor:pointer;}
 
@@ -1754,7 +1775,6 @@ function renderProdutos(){
   const [campoOrd, dirOrd] = produtoOrdem.split('-');
   if(campoOrd==='estoque') list = ordenarLista(list.map(p=>({...p, __estoque:estoqueQtd(p.id)})), '__estoque', dirOrd);
   else list = ordenarLista(list, campoOrd, dirOrd);
-  const limiteProdutos = DB.config.limiteBaixoProdutos ?? 5;
   pageEl.innerHTML = `
     <div class="page-head">
       <div><h1>Produtos</h1><p>Modelos, preços e estoque das peças que você imprime.</p></div>
@@ -1763,12 +1783,6 @@ function renderProdutos(){
         <button class="btn secondary" id="btnGerenciarCatMat">🏷️ Categorias e Materiais</button>
         <button class="btn" id="btnNovoProduto">${ICON_PLUS}Novo produto</button>
       </div>
-    </div>
-
-    <div class="panel" style="padding:14px 18px; display:flex; align-items:center; gap:16px; flex-wrap:wrap;">
-      <label style="margin:0; font-weight:600; font-size:13.5px; color:var(--text);">Limite para Estoque Baixo (unidades):</label>
-      <input type="number" id="inputLimiteProdutos" value="${limiteProdutos}" min="0" style="width:90px;">
-      <button class="btn sm secondary" id="btnSalvarLimiteProdutos">Definir limite</button>
     </div>
 
     <div class="panel">
@@ -1792,7 +1806,6 @@ function renderProdutos(){
               <span class="color-chip"><span class="swatch" style="background:${c.hex||'#3fc1b0'};"></span>${esc(c.nome)}</span>
             `).join(' ');
             const qtd = estoqueQtd(p.id);
-            const baixo = qtd <= limiteProdutos;
 
             return `
             <tr data-dbl="${p.id}">
@@ -1803,7 +1816,7 @@ function renderProdutos(){
               <td>${coresList || '—'}</td>
               <td class="num mono">${fmtMoney(p.custo)}</td>
               <td class="num mono">${fmtMoney(p.preco)}</td>
-              <td class="num mono" style="font-weight:600; ${baixo?'color:var(--danger);':''}">${qtd} un.</td>
+              <td class="num mono" style="font-weight:600;">${qtd} un.</td>
               <td><div class="row-actions">
                 <button class="btn sm secondary" data-mod="${p.id}">Estoque</button>
                 <button class="icon-btn" data-edit="${p.id}">${ICON_EDIT}</button>
@@ -1825,11 +1838,6 @@ function renderProdutos(){
   });
   document.getElementById('selectOrdemProduto').addEventListener('change', e=>{
     produtoOrdem = e.target.value; renderProdutos();
-  });
-  document.getElementById('btnSalvarLimiteProdutos').addEventListener('click', ()=>{
-    const val = parseInt(document.getElementById('inputLimiteProdutos').value, 10);
-    DB.config.limiteBaixoProdutos = isNaN(val) ? 5 : Math.max(0, val);
-    save(); renderProdutos();
   });
   pageEl.querySelectorAll('[data-mod]').forEach(b=> b.addEventListener('click', ()=> openEstoqueModal('produto', b.dataset.mod)));
   pageEl.querySelectorAll('[data-edit]').forEach(b=> b.addEventListener('click', ()=> openProdutoForm(b.dataset.edit)));
@@ -2808,13 +2816,32 @@ function openFilamentoCadastroForm(id){
   }
   draw();
 }
-let pedidoFiltroStatus = new Set(); // vazio = mostra todos os status
+let pedidoFiltroStatus = new Set(); // vazio = mostra tudo. Chaves: id do status, 'atrasado', 'pago:1|0', 'forma:<nome>'
+let pedidoFiltroAberto = false;
 let pedidoBusca = '';
 let pedidoOrdem = 'dataEntrega-asc';
+const PEDIDO_FORMAS_PAGAMENTO = ['PIX','Cartão de Crédito','Cartão de Débito','Dinheiro','Comodato'];
+document.addEventListener('click', ()=>{
+  if(!pedidoFiltroAberto) return;
+  pedidoFiltroAberto = false;
+  document.getElementById('menuFiltroPedidos')?.classList.remove('open');
+});
 
 function renderPedidos(){
   let list = [...DB.pedidos];
-  if(pedidoFiltroStatus.size>0) list = list.filter(p=> pedidoFiltroStatus.has(p.status) || (pedidoFiltroStatus.has('atrasado') && pedidoAtrasado(p)));
+  if(pedidoFiltroStatus.size>0){
+    // Dentro de cada grupo vale "ou"; entre grupos vale "e"
+    const sel = [...pedidoFiltroStatus];
+    const gStatus = sel.filter(k=> !k.startsWith('pago:') && !k.startsWith('forma:'));
+    const gPago = sel.filter(k=> k.startsWith('pago:')).map(k=>k.slice(5));
+    const gForma = sel.filter(k=> k.startsWith('forma:')).map(k=>k.slice(6));
+    list = list.filter(p=>{
+      if(gStatus.length && !(gStatus.includes(p.status) || (gStatus.includes('atrasado') && pedidoAtrasado(p)))) return false;
+      if(gPago.length && !gPago.includes(p.pago ? '1' : '0')) return false;
+      if(gForma.length && !gForma.includes(p.formaPagamento||'PIX')) return false;
+      return true;
+    });
+  }
   if(pedidoBusca) list = list.filter(p=> clienteNome(p.clienteId).toLowerCase().includes(pedidoBusca.toLowerCase()));
   const [campoOrd, dirOrd] = pedidoOrdem.split('-');
   if(campoOrd==='cliente') list = ordenarLista(list.map(p=>({...p, __cliente:clienteNome(p.clienteId)})), '__cliente', dirOrd);
@@ -2829,13 +2856,19 @@ function renderPedidos(){
     <div class="panel">
       <div class="toolbar">
         <div class="search-box">${ICON_SEARCH}<input id="buscaPedido" placeholder="Buscar por cliente…" value="${esc(pedidoBusca)}"></div>
-        <div class="chip-filters">
-          ${STATUS_LIST.map(s=>{
-            const ativo = pedidoFiltroStatus.size===0 || pedidoFiltroStatus.has(s.id);
-            return `<button type="button" class="badge ${s.cls} chip-toggle ${ativo?'chip-active':'chip-inactive'}" data-status-chip="${s.id}" title="Mostrar/ocultar ${s.label}">${s.label}</button>`;
-          }).join('')}
-          ${(()=>{ const ativo = pedidoFiltroStatus.size===0 || pedidoFiltroStatus.has('atrasado'); return `<button type="button" class="badge b-atrasado chip-toggle ${ativo?'chip-active':'chip-inactive'}" data-status-chip="atrasado" title="Mostrar/ocultar pedidos em atraso">⚠ Atrasado</button>`; })()}
-          ${pedidoFiltroStatus.size>0 ? `<button type="button" class="chip-clear" id="btnLimparStatus">Limpar filtro ✕</button>` : ''}
+        <div class="filter-dropdown">
+          <button type="button" class="btn secondary" id="btnFiltroPedidos">Filtros${pedidoFiltroStatus.size?` (${pedidoFiltroStatus.size})`:''} ▾</button>
+          <div class="filter-menu ${pedidoFiltroAberto?'open':''}" id="menuFiltroPedidos">
+            <div class="filter-group-title">Status</div>
+            ${STATUS_LIST.map(s=>`<label class="filter-option"><input type="checkbox" data-filtro-pedido="${s.id}" ${pedidoFiltroStatus.has(s.id)?'checked':''}><span class="badge ${s.cls}">${s.label}</span></label>`).join('')}
+            <label class="filter-option"><input type="checkbox" data-filtro-pedido="atrasado" ${pedidoFiltroStatus.has('atrasado')?'checked':''}><span class="badge b-atrasado">⚠ Atrasado</span></label>
+            <div class="filter-group-title">Pagamento</div>
+            <label class="filter-option"><input type="checkbox" data-filtro-pedido="pago:1" ${pedidoFiltroStatus.has('pago:1')?'checked':''}><span class="badge b-pronto">Pago</span></label>
+            <label class="filter-option"><input type="checkbox" data-filtro-pedido="pago:0" ${pedidoFiltroStatus.has('pago:0')?'checked':''}><span class="badge b-cancelado">Não pago</span></label>
+            <div class="filter-group-title">Forma de pagamento</div>
+            ${PEDIDO_FORMAS_PAGAMENTO.map(fp=>`<label class="filter-option"><input type="checkbox" data-filtro-pedido="forma:${esc(fp)}" ${pedidoFiltroStatus.has('forma:'+fp)?'checked':''}><span>${esc(fp)}</span></label>`).join('')}
+            ${pedidoFiltroStatus.size>0 ? `<button type="button" class="chip-clear" id="btnLimparStatus" style="margin-top:8px;">Limpar filtros ✕</button>` : ''}
+          </div>
         </div>
         <select id="selectOrdemPedido" style="max-width:220px; margin-left:auto;">
           <option value="dataEntrega-asc" ${pedidoOrdem==='dataEntrega-asc'?'selected':''}>Entrega (mais próxima)</option>
@@ -2889,9 +2922,15 @@ function renderPedidos(){
     pedidoBusca=e.target.value; renderPedidos();
     const el=document.getElementById('buscaPedido'); el.focus(); el.selectionStart = el.value.length;
   });
-  pageEl.querySelectorAll('[data-status-chip]').forEach(b=> b.addEventListener('click', ()=>{
-    const id = b.dataset.statusChip;
-    if(pedidoFiltroStatus.has(id)) pedidoFiltroStatus.delete(id); else pedidoFiltroStatus.add(id);
+  document.getElementById('btnFiltroPedidos').addEventListener('click', e=>{
+    e.stopPropagation();
+    pedidoFiltroAberto = !pedidoFiltroAberto;
+    document.getElementById('menuFiltroPedidos').classList.toggle('open', pedidoFiltroAberto);
+  });
+  document.getElementById('menuFiltroPedidos').addEventListener('click', e=> e.stopPropagation());
+  pageEl.querySelectorAll('[data-filtro-pedido]').forEach(chk=> chk.addEventListener('change', ()=>{
+    const id = chk.dataset.filtroPedido;
+    if(chk.checked) pedidoFiltroStatus.add(id); else pedidoFiltroStatus.delete(id);
     renderPedidos();
   }));
   document.getElementById('btnLimparStatus')?.addEventListener('click', ()=>{ pedidoFiltroStatus.clear(); renderPedidos(); });
