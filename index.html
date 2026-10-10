@@ -238,6 +238,16 @@
   }
   .chip-clear:hover{color:var(--text);}
 
+  /* ---------- gráfico de vendas por produto ---------- */
+  .vendas-chart{display:flex; flex-direction:column; gap:9px;}
+  .vendas-row{display:grid; grid-template-columns:minmax(80px,32%) 1fr auto; gap:10px; align-items:center; font-size:13px;}
+  .vendas-nome{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
+  .vendas-track{background:var(--surface-2); border-radius:6px; height:14px; overflow:hidden;}
+  .vendas-bar{height:100%; background:linear-gradient(90deg,var(--accent-strong),var(--accent)); border-radius:6px;}
+  .vendas-valor{font-family:var(--font-mono); font-size:12.5px; min-width:78px; text-align:right;}
+  .vendas-total{border-top:1px dashed var(--border); padding-top:9px; margin-top:2px; font-size:12.5px; color:var(--text-muted);}
+  .vendas-total b{color:var(--text); font-family:var(--font-mono);}
+
   /* ---------- filtro em lista (multisseleção) ---------- */
   .filter-dropdown{position:relative;}
   .filter-menu{
@@ -1268,10 +1278,17 @@ function fmtMesLabel(iso){
 }
 
 let dashboardMes = null;
+let dashboardAno = null;
+let vendasMetrica = 'valor';
 
 function renderDashboard(){
   const mesAtual = new Date().toISOString().slice(0,7);
   if(!dashboardMes) dashboardMes = mesAtual;
+  const anoAtual = mesAtual.slice(0,4);
+  const anosSet = new Set(DB.pedidos.map(p=>(p.dataEntrega||p.dataPedido||'').slice(0,4)).filter(a=>/^\d{4}$/.test(a)));
+  anosSet.add(anoAtual);
+  const anosVendas = [...anosSet].sort().reverse();
+  if(!dashboardAno || !anosVendas.includes(dashboardAno)) dashboardAno = anoAtual;
 
   const atrasados = DB.pedidos.filter(pedidoAtrasado);
   const limiteFilamentos = DB.config.limiteBaixoFilamentos ?? 200;
@@ -1367,7 +1384,28 @@ function renderDashboard(){
       </div>
     </div>
 
-    <div class="panel">
+    <div style="display:flex; align-items:center; gap:12px; margin:22px 0 12px 0; flex-wrap:wrap;">
+      <h2 style="font-size:16px; margin:0;">Vendas por Produto</h2>
+      <select id="selectMetricaVendas" style="max-width:190px; margin-left:auto;">
+        <option value="valor" ${vendasMetrica==='valor'?'selected':''}>Por valor (R$)</option>
+        <option value="qtd" ${vendasMetrica==='qtd'?'selected':''}>Por quantidade</option>
+      </select>
+    </div>
+    <div class="grid-cards" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));">
+      <div class="panel" style="margin-bottom:0;">
+        <h2>Mensal — ${fmtMesLabel(dashboardMes)} <span class="count">pedidos entregues</span></h2>
+        ${vendasChartHTML(dashboardMes, vendasMetrica)}
+        <p class="hint">O mês é o selecionado em "Métricas Financeiras do Mês".</p>
+      </div>
+      <div class="panel" style="margin-bottom:0;">
+        <h2>Anual — <select id="selectAnoDashboard" style="width:auto; padding:4px 8px; display:inline-block;">
+          ${anosVendas.map(a=>`<option value="${a}" ${a===dashboardAno?'selected':''}>${a}</option>`).join('')}
+        </select> <span class="count">pedidos entregues</span></h2>
+        ${vendasChartHTML(dashboardAno, vendasMetrica)}
+      </div>
+    </div>
+
+    <div class="panel" style="margin-top:20px;">
       <h2>Pedidos recentes <span class="count">${DB.pedidos.length} no total</span></h2>
       ${recentes.length ? tablePedidosMini(recentes) : emptyState('Nenhum pedido cadastrado ainda.', 'btnNovoPedidoEmpty')}
     </div>
@@ -1402,6 +1440,50 @@ function renderDashboard(){
     dashboardMes = e.target.value;
     renderDashboard();
   });
+  document.getElementById('selectAnoDashboard')?.addEventListener('change', e=>{
+    dashboardAno = e.target.value;
+    renderDashboard();
+  });
+  document.getElementById('selectMetricaVendas')?.addEventListener('change', e=>{
+    vendasMetrica = e.target.value;
+    renderDashboard();
+  });
+}
+
+// Vendas por produto: considera pedidos ENTREGUES (mês/ano pela data de entrega, como no restante do painel).
+// Em comodato só conta o que já foi vendido.
+function vendasPorProduto(prefixoData){
+  const mapa = {};
+  DB.pedidos.filter(p=> p.status==='entregue').forEach(p=>{
+    const data = (p.dataEntrega||p.dataPedido||'');
+    if(!data.startsWith(prefixoData)) return;
+    (p.itens||[]).forEach(it=>{
+      const q = itemQtdFaturavel(p.formaPagamento, it);
+      if(!q) return;
+      const prod = produtoById(it.produtoId);
+      const chave = it.produtoId || '—';
+      if(!mapa[chave]) mapa[chave] = {nome: prod?.nome || 'Produto removido', foto: prod?.foto || '', qtd:0, valor:0};
+      mapa[chave].qtd += q;
+      mapa[chave].valor += Number(it.preco||0)*q + itemAcrescimoTotal(it, q);
+    });
+  });
+  return Object.values(mapa);
+}
+function vendasChartHTML(prefixoData, metrica){
+  const lista = vendasPorProduto(prefixoData).sort((a,b)=> b[metrica]-a[metrica]);
+  if(!lista.length) return '<p class="hint" style="padding:10px 0;">Nenhuma venda entregue neste período.</p>';
+  const max = Math.max(...lista.map(x=>x[metrica])) || 1;
+  const totalValor = lista.reduce((s,x)=>s+x.valor,0), totalQtd = lista.reduce((s,x)=>s+x.qtd,0);
+  const fmt = x => metrica==='valor' ? fmtMoney(x.valor) : `${x.qtd} un.`;
+  return `<div class="vendas-chart">
+    ${lista.map(x=>`
+      <div class="vendas-row" title="${esc(x.nome)} — ${x.qtd} un. — ${fmtMoney(x.valor)}">
+        <div class="vendas-nome">${esc(x.nome)}</div>
+        <div class="vendas-track"><div class="vendas-bar" style="width:${Math.max(2, x[metrica]/max*100)}%;"></div></div>
+        <div class="vendas-valor">${fmt(x)}</div>
+      </div>`).join('')}
+    <div class="vendas-total">Total: <b>${fmtMoney(totalValor)}</b> · <b>${totalQtd}</b> un.</div>
+  </div>`;
 }
 
 function tablePedidosMini(list){
@@ -2832,10 +2914,12 @@ function renderPedidos(){
   if(pedidoFiltroStatus.size>0){
     // Dentro de cada grupo vale "ou"; entre grupos vale "e"
     const sel = [...pedidoFiltroStatus];
-    const gStatus = sel.filter(k=> !k.startsWith('pago:') && !k.startsWith('forma:'));
+    const gStatus = sel.filter(k=> !k.startsWith('pago:') && !k.startsWith('forma:') && !k.startsWith('prod:'));
     const gPago = sel.filter(k=> k.startsWith('pago:')).map(k=>k.slice(5));
     const gForma = sel.filter(k=> k.startsWith('forma:')).map(k=>k.slice(6));
+    const gProd = sel.filter(k=> k.startsWith('prod:')).map(k=>k.slice(5));
     list = list.filter(p=>{
+      if(gProd.length && !(p.itens||[]).some(it=> gProd.includes(it.produtoId))) return false;
       if(gStatus.length && !(gStatus.includes(p.status) || (gStatus.includes('atrasado') && pedidoAtrasado(p)))) return false;
       if(gPago.length && !gPago.includes(p.pago ? '1' : '0')) return false;
       if(gForma.length && !gForma.includes(p.formaPagamento||'PIX')) return false;
@@ -2865,6 +2949,8 @@ function renderPedidos(){
             <div class="filter-group-title">Pagamento</div>
             <label class="filter-option"><input type="checkbox" data-filtro-pedido="pago:1" ${pedidoFiltroStatus.has('pago:1')?'checked':''}><span class="badge b-pronto">Pago</span></label>
             <label class="filter-option"><input type="checkbox" data-filtro-pedido="pago:0" ${pedidoFiltroStatus.has('pago:0')?'checked':''}><span class="badge b-cancelado">Não pago</span></label>
+            ${DB.produtos.length ? `<div class="filter-group-title">Produto</div>
+            ${[...DB.produtos].sort((a,b)=>(a.nome||'').localeCompare(b.nome||'')).map(pr=>`<label class="filter-option"><input type="checkbox" data-filtro-pedido="prod:${esc(pr.id)}" ${pedidoFiltroStatus.has('prod:'+pr.id)?'checked':''}><span>${esc(pr.nome)}</span></label>`).join('')}` : ''}
             <div class="filter-group-title">Forma de pagamento</div>
             ${PEDIDO_FORMAS_PAGAMENTO.map(fp=>`<label class="filter-option"><input type="checkbox" data-filtro-pedido="forma:${esc(fp)}" ${pedidoFiltroStatus.has('forma:'+fp)?'checked':''}><span>${esc(fp)}</span></label>`).join('')}
             ${pedidoFiltroStatus.size>0 ? `<button type="button" class="chip-clear" id="btnLimparStatus" style="margin-top:8px;">Limpar filtros ✕</button>` : ''}
