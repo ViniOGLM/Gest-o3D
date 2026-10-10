@@ -239,6 +239,14 @@
   .chip-clear:hover{color:var(--text);}
 
   /* ---------- gráfico de vendas por produto ---------- */
+  .seg-toggle{display:inline-flex; border:1px solid var(--border); border-radius:8px; overflow:hidden; background:var(--surface-2);}
+  .seg-toggle button{
+    background:transparent; border:none; color:var(--text-muted); padding:8px 14px;
+    font-family:var(--font-ui); font-size:13px; font-weight:600; cursor:pointer;
+  }
+  .seg-toggle button + button{border-left:1px solid var(--border);}
+  .seg-toggle button:hover{color:var(--text);}
+  .seg-toggle button.active{background:var(--accent); color:#0e1210;}
   .vendas-chart{display:flex; flex-direction:column; gap:9px;}
   .vendas-row{display:grid; grid-template-columns:minmax(80px,32%) 1fr auto; gap:10px; align-items:center; font-size:13px;}
   .vendas-nome{white-space:nowrap; overflow:hidden; text-overflow:ellipsis;}
@@ -1386,10 +1394,10 @@ function renderDashboard(){
 
     <div style="display:flex; align-items:center; gap:12px; margin:22px 0 12px 0; flex-wrap:wrap;">
       <h2 style="font-size:16px; margin:0;">Vendas por Produto</h2>
-      <select id="selectMetricaVendas" style="max-width:190px; margin-left:auto;">
-        <option value="valor" ${vendasMetrica==='valor'?'selected':''}>Por valor (R$)</option>
-        <option value="qtd" ${vendasMetrica==='qtd'?'selected':''}>Por quantidade</option>
-      </select>
+      <div class="seg-toggle" style="margin-left:auto;">
+        <button type="button" class="${vendasMetrica==='qtd'?'active':''}" data-metrica-vendas="qtd">Quantidades vendidas</button>
+        <button type="button" class="${vendasMetrica==='valor'?'active':''}" data-metrica-vendas="valor">Valores acumulados (R$)</button>
+      </div>
     </div>
     <div class="grid-cards" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr));">
       <div class="panel" style="margin-bottom:0;">
@@ -1444,10 +1452,10 @@ function renderDashboard(){
     dashboardAno = e.target.value;
     renderDashboard();
   });
-  document.getElementById('selectMetricaVendas')?.addEventListener('change', e=>{
-    vendasMetrica = e.target.value;
+  pageEl.querySelectorAll('[data-metrica-vendas]').forEach(b=> b.addEventListener('click', ()=>{
+    vendasMetrica = b.dataset.metricaVendas;
     renderDashboard();
-  });
+  }));
 }
 
 // Vendas por produto: considera pedidos ENTREGUES (mês/ano pela data de entrega, como no restante do painel).
